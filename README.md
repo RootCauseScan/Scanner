@@ -130,6 +130,7 @@ The documentation includes:
 ## License
 
 This project is licensed under the GNU General Public License v3.0 - see the [LICENSE](LICENSE) file for details.
+
 ---
 
 **Need help?** Visit [docs.rootcause.sh](https://docs.rootcause.sh) or join our community discussions.
