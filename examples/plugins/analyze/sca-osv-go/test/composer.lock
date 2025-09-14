@@ -1,0 +1,28 @@
+{
+    "_readme": [
+        "This file locks the dependencies of your project to a known state",
+        "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
+        "This file is @generated automatically"
+    ],
+    "content-hash": "f4a2fcfe44c0a0b8b3b0b8b3b0b8b3b0b8b3b0b8b3b0b8b3b0b8b3b0b8b3b0b8",
+    "packages": [
+        {
+            "name": "monolog/monolog",
+            "version": "1.25.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/Seldaek/monolog.git",
+                "reference": "f4a2fcfe44c0a0b8b3b0b8b3b0b8b3b0b8b3b0b8b3b0b8b3b0b8b3b0b8b3b0b8"
+            }
+        },
+        {
+            "name": "symfony/console",
+            "version": "v4.4.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/symfony/console.git",
+                "reference": "f4a2fcfe44c0a0b8b3b0b8b3b0b8b3b0b8b3b0b8b3b0b8b3b0b8b3b0b8b3b0b8"
+            }
+        }
+    ]
+}

@@ -1,0 +1,8 @@
+rules:
+  - id: py.yaml-load
+    severity: MEDIUM
+    description: Avoid yaml.load without specifying a SafeLoader
+    message: Use yaml.safe_load or specify Loader=yaml.SafeLoader
+    category: python
+    pattern: "yaml.load(...)"
+    pattern-not: "yaml.load(..., Loader=yaml.SafeLoader)"

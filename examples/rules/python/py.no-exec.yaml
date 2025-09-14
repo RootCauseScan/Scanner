@@ -1,0 +1,8 @@
+rules:
+  - id: py.no-exec
+    severity: MEDIUM
+    description: Avoid using exec()
+    message: Do not use exec() with untrusted input
+    category: python
+    pattern: "exec(...)"
+    fix: "print(...)"

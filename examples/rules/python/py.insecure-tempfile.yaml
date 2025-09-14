@@ -1,0 +1,7 @@
+rules:
+  - id: py.insecure-tempfile
+    severity: MEDIUM
+    description: Avoid using tempfile.mktemp()
+    message: Avoid using tempfile.mktemp()
+    category: python
+    pattern: "tempfile.mktemp(...)"

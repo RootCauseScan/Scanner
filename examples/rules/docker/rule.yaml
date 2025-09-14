@@ -1,0 +1,22 @@
+rules:
+  - id: docker.no-latest-tag
+    severity: MEDIUM
+    description: Avoid using the latest tag
+    message: Do not use the latest tag
+    category: dockerfile
+    patterns:
+      - pattern: ":latest"
+  - id: docker.no-add
+    severity: MEDIUM
+    description: Avoid using ADD
+    message: Use COPY instead of ADD
+    category: dockerfile
+    patterns:
+      - pattern: "ADD "
+  - id: docker.no-sudo
+    severity: MEDIUM
+    description: Avoid using sudo in Dockerfile
+    message: Avoid using sudo in Dockerfile
+    category: dockerfile
+    patterns:
+      - pattern: "sudo "

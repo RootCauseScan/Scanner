@@ -1,0 +1,7 @@
+rules:
+  - id: code.no-todo-comment
+    severity: LOW
+    description: Avoid leaving TODO comments in the code
+    message: Remove TODO comments
+    category: code
+    pattern: "TODO"

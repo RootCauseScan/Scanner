@@ -1,0 +1,10 @@
+{
+  "type": ["object", "null"],
+  "properties": {
+    "output": {
+      "type": "string",
+      "default": "report.pdf",
+      "description": "Output filename for the PDF report"
+    }
+  }
+}

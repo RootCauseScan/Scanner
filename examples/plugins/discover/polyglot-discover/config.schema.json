@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "extensions": {
+      "type": "array",
+      "items": { "type": "string" },
+      "default": [".rs", ".py", ".js", ".ts", ".yaml", ".yml", ".tf", ".dockerfile"]
+    },
+    "max_depth": { "type": ["integer", "null"], "minimum": 0 },
+    "include_manifests": { "type": "boolean", "default": true }
+  },
+  "additionalProperties": true
+}
+
+

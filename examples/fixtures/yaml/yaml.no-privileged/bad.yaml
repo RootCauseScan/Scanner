@@ -1,0 +1,4 @@
+containers:
+  - name: app
+    securityContext:
+      privileged: true

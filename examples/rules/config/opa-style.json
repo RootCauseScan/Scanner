@@ -1,0 +1,41 @@
+{
+  "rules": {
+    "kubernetes_security": {
+      "non_root_user": {
+        "description": "Pods should not run as root",
+        "severity": "HIGH",
+        "query": {
+          "type": "yaml",
+          "path": "spec.template.spec.securityContext.runAsNonRoot",
+          "value": false,
+          "message": "Pod runs as root",
+          "remediation": "Set runAsNonRoot: true"
+        }
+      }
+    },
+    "terraform_security": {
+      "s3_public_acl": {
+        "description": "S3 bucket ACL is public-read",
+        "severity": "HIGH",
+        "query": {
+          "type": "hcl",
+          "path": "resource.aws_s3_bucket.*.acl",
+          "value": "public-read",
+          "message": "S3 bucket ACL is public-read",
+          "remediation": "Use private and control access via IAM/Policies"
+        }
+      },
+      "sg_anywhere_ssh": {
+        "description": "Security Group allows SSH from anywhere",
+        "severity": "HIGH",
+        "query": {
+          "type": "hcl",
+          "path": "resource.aws_security_group.*.ingress.cidr_blocks",
+          "value": "0.0.0.0/0",
+          "message": "Security Group allows SSH from anywhere",
+          "remediation": "Restrict SSH to trusted CIDRs or use SSM Session Manager"
+        }
+      }
+    }
+  }
+}

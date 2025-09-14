@@ -1,0 +1,7 @@
+rules:
+  - id: py.req-res-route
+    severity: HIGH
+    description: Detects unsanitized request data sent in response
+    message: Unsanitized request data sent in response
+    category: python
+    pattern: "return request."

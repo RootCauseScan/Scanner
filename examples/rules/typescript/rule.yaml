@@ -1,0 +1,13 @@
+rules:
+  - id: ts.no-eval
+    severity: MEDIUM
+    description: Avoid using eval()
+    message: Do not use eval with untrusted input
+    category: typescript
+    pattern: "eval(...)"
+  - id: ts.req-res-route
+    severity: HIGH
+    description: Detects direct sending of request data in response
+    message: Unsanitized request data sent in response
+    category: typescript
+    pattern: "res.send(req."

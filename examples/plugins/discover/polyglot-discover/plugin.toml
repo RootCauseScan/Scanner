@@ -1,0 +1,11 @@
+name = "polyglot-discover"
+version = "0.1.0"
+api_version = "1.0.0"
+entry = "python3 plugin.py"
+capabilities = ["discover"]
+concurrency = "single"
+reads_fs = true
+needs_content = false
+config_schema = "config.schema.json"
+
+

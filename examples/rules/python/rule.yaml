@@ -1,0 +1,7 @@
+rules:
+  - id: py.no-eval
+    severity: MEDIUM
+    description: Avoid using eval()
+    message: Do not use eval() with untrusted input
+    category: python
+    pattern: "eval(...)"

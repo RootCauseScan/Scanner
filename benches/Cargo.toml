@@ -1,0 +1,16 @@
+[package]
+name = "benches"
+version = "1.0.0"
+edition = "2021"
+
+[dependencies]
+parsers = { path = "../crates/parsers" }
+engine = { path = "../crates/engine" }
+loader = { path = "../crates/loader" }
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "analysis"
+harness = false

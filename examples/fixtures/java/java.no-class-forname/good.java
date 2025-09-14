@@ -1,0 +1,3 @@
+class Good {
+    void load() {}
+}

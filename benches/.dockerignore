@@ -1,0 +1,16 @@
+# Ignorar archivos innecesarios para la construcción de Docker
+target/debug/
+target/release/
+.git/
+.gitignore
+*.md
+!readme.md
+.dockerignore
+docker-compose.yml
+serve.sh
+
+# Ignorar archivos temporales
+*.tmp
+*.log
+.DS_Store
+Thumbs.db

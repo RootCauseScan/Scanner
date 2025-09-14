@@ -1,0 +1,16 @@
+{
+  "findings": [
+    {
+      "id": "6d2d1593bf3f8c701473020f7348d8c60dc03036be475adaa8193b3551b9f248",
+      "rule_id": "rule",
+      "severity": "HIGH",
+      "file": "src/main.rs",
+      "line": 10,
+      "column": 5,
+      "excerpt": "let x = 1",
+      "message": "dummy",
+      "remediation": null
+    }
+  ],
+  "total": 1
+}

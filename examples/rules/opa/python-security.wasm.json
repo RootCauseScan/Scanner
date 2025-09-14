@@ -1,0 +1,10 @@
+{
+  "id": "opa.python.security",
+  "severity": "HIGH",
+  "category": "python",
+  "message": "Python security vulnerabilities detected",
+  "entrypoint": "data.audit.python.deny",
+  "remediation": "Use secure alternatives and avoid dangerous functions",
+  "description": "Detects dangerous Python functions: eval(), exec(), pickle.load(), and subprocess with shell=True"
+}
+

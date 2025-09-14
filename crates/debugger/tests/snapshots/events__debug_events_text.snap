@@ -1,0 +1,9 @@
+---
+source: crates/debugger/tests/events.rs
+expression: sink.output()
+---
+SerEvent { kind: "RuleCompiled", path: None, file: None, rule_id: Some("py.no-exec"), matched: None }
+SerEvent { kind: "ParseStart", path: Some("bad.py"), file: None, rule_id: None, matched: None }
+SerEvent { kind: "ParseEnd", path: Some("bad.py"), file: None, rule_id: None, matched: None }
+SerEvent { kind: "MatchAttempt", path: None, file: Some("bad.py"), rule_id: Some("py.no-exec"), matched: None }
+SerEvent { kind: "MatchResult", path: None, file: Some("bad.py"), rule_id: Some("py.no-exec"), matched: Some(true) }

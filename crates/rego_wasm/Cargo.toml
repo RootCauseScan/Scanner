@@ -1,0 +1,21 @@
+[package]
+name = "rego_wasm"
+version = "1.0.0"
+edition = "2021"
+description = "OPA Rego WASM execution support for RootCause"
+readme = "README.md"
+license.workspace = true
+repository = "https://github.com/rootcausescan/scanner"
+homepage = "https://github.com/rootcausescan/scanner"
+keywords = ["security", "sast", "static-analysis"]
+categories = ["development-tools", "code-analysis"]
+
+[dependencies]
+anyhow = "1"
+opa-wasm = "0.1.7"
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+wasmtime = { version = "35" }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread"] }

@@ -1,0 +1,5 @@
+rules:
+  - id: examples.pattern-regex
+    message: Detect Slack token
+    severity: LOW
+    pattern-regex: "(xoxb-[0-9]{8,14}-[a-zA-Z0-9]{18,26})"

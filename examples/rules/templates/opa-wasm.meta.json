@@ -1,0 +1,8 @@
+{
+  "id": "opa.example-policy",
+  "severity": "MEDIUM",
+  "category": "config",
+  "message": "Policy violation",
+  "entrypoint": "data.main.deny",
+  "remediation": "Fix condition"
+}

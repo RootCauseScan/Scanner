@@ -1,0 +1,10 @@
+{
+  "id": "opa.docker.security",
+  "severity": "HIGH",
+  "category": "docker",
+  "message": "Docker security violations detected",
+  "entrypoint": "data.audit.docker.deny",
+  "remediation": "Review Docker security best practices",
+  "description": "Detects common Docker security issues: root user, latest tags, ADD usage, and sudo in containers"
+}
+

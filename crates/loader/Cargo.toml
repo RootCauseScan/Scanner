@@ -1,0 +1,22 @@
+[package]
+name = "loader"
+version = "1.0.0"
+edition = "2021"
+description = "Loads configuration and source code rules for RootCause"
+readme = "README.md"
+license.workspace = true
+repository = "https://github.com/rootcausescan/scanner"
+homepage = "https://github.com/rootcausescan/scanner"
+keywords = ["security", "sast", "static-analysis"]
+categories = ["development-tools", "code-analysis"]
+
+[dependencies]
+anyhow = "1"
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+regex = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

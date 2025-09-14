@@ -1,0 +1,32 @@
+[package]
+name = "debugger"
+version = "1.0.0"
+edition = "2021"
+description = "Interactive debugger for inspecting RootCause rules and IR"
+readme = "README.md"
+license.workspace = true
+repository = "https://github.com/rootcausescan/scanner"
+homepage = "https://github.com/rootcausescan/scanner"
+keywords = ["security", "sast", "static-analysis"]
+categories = ["development-tools", "code-analysis"]
+
+[[bin]]
+name = "debugger"
+path = "src/main.rs"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+ir = { path = "../ir" }
+loader = { path = "../loader" }
+parsers = { path = "../parsers" }
+serde_json = { workspace = true }
+serde = { workspace = true }
+engine = { path = "../engine" }
+
+[dev-dependencies]
+insta = "1"
+

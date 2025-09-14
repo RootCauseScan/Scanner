@@ -1,0 +1,33 @@
+[package]
+name = "engine"
+version = "1.0.0"
+edition = "2021"
+description = "Parallel rule evaluation engine for RootCause"
+readme = "README.md"
+license.workspace = true
+repository = "https://github.com/rootcausescan/scanner"
+homepage = "https://github.com/rootcausescan/scanner"
+keywords = ["security", "sast", "static-analysis"]
+categories = ["development-tools", "code-analysis"]
+
+[dependencies]
+rayon = { workspace = true }
+regex = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+loader = { path = "../loader" }
+ir = { path = "../ir" }
+rego_wasm = { path = "../rego_wasm" }
+tokio = { version = "1", features = ["rt-multi-thread", "time"] }
+anyhow = "1"
+tracing = { workspace = true }
+blake3 = "1"
+parsers = { path = "../parsers" }
+shlex = { workspace = true }
+plugin_core = { path = "../plugin_core" }
+
+[dev-dependencies]
+parsers = { path = "../parsers" }
+tempfile = "3"
+tracing-subscriber = { workspace = true }
+base64 = { workspace = true }

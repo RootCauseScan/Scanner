@@ -1,0 +1,34 @@
+[package]
+name = "parsers-fuzz"
+version = "0.0.1"
+edition = "2021"
+publish = false
+
+[workspace]
+members = []
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+parsers = { path = "../crates/parsers" }
+ir = { path = "../crates/ir" }
+
+[[bin]]
+name = "yaml"
+path = "fuzz_targets/yaml.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "dockerfile"
+path = "fuzz_targets/dockerfile.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "python"
+path = "fuzz_targets/python.rs"
+test = false
+doc = false

@@ -1,0 +1,12 @@
+/target
+**/*.swp
+.DS_Store
+/console.log
+*/.idea
+*/.vscode
+/coverage
+/*.sarif
+*.patch
+
+# Python caches
+__pycache__/

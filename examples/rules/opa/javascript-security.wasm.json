@@ -1,0 +1,10 @@
+{
+  "id": "opa.javascript.security",
+  "severity": "HIGH",
+  "category": "javascript",
+  "message": "JavaScript security vulnerabilities detected",
+  "entrypoint": "data.audit.javascript.deny",
+  "remediation": "Use secure DOM manipulation and avoid code injection",
+  "description": "Detects XSS and code injection vulnerabilities: eval(), innerHTML, document.write(), and setTimeout with strings"
+}
+

@@ -1,0 +1,19 @@
+rules:
+  - id: js.no-eval
+    severity: MEDIUM
+    description: Avoid using eval()
+    message: Do not use eval with untrusted input
+    category: javascript
+    pattern: "eval(...)"
+  - id: js.req-res-route
+    severity: HIGH
+    description: Detects unsanitized request data sent in response
+    message: Unsanitized request data sent in response
+    category: javascript
+    pattern: "res.send(req."
+  - id: js.no-innerhtml
+    severity: HIGH
+    description: Avoid assigning to innerHTML
+    message: Potential XSS via innerHTML assignment
+    category: javascript
+    pattern: ".innerHTML ="

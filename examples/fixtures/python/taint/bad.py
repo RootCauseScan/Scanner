@@ -1,0 +1,2 @@
+user = source()
+sink(user)

@@ -1,0 +1,14 @@
+---
+source: crates/debugger/tests/ir_exports.rs
+expression: cfg.to_json()
+---
+{
+  "nodes": [
+    {
+      "id": 0,
+      "line": 2,
+      "code": "eval(expr)"
+    }
+  ],
+  "edges": []
+}

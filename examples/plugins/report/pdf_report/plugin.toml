@@ -1,0 +1,16 @@
+name = "pdf-report"
+version = "1.0.0"
+api_version = "1.x"
+entry = "plugin_wrapper.sh"
+capabilities = ["report"]
+needs_content = false
+reads_fs = true
+timeout_ms = 30000
+mem_mb = 256
+config_schema = "schema.json"
+
+[install]
+steps = [
+  "chmod +x install.sh",
+  "./install.sh"
+]

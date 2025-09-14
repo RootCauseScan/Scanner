@@ -1,0 +1,6 @@
+name = "extra-rules"
+version = "0.1.0"
+api_version = "1.0.0"
+entry = "python3 plugin.py"
+capabilities = ["rules", "discover"]
+mem_mb = 64

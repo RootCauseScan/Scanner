@@ -1,0 +1,31 @@
+rules:
+  - id: rs.no-unwrap
+    severity: MEDIUM
+    description: Avoid using unwrap() which can cause panic
+    message: Avoid unwrap() in production
+    category: rust
+    pattern: "$VAR.unwrap()"
+  - id: rs.no-unsafe
+    severity: HIGH
+    description: Avoid using unsafe in functions or blocks
+    message: Do not use unsafe
+    category: rust
+    pattern: "unsafe"
+  - id: rs.no-expect
+    severity: MEDIUM
+    description: Avoid using expect() which can cause panic
+    message: Avoid expect() in production
+    category: rust
+    pattern: "$VAR.expect(...)"
+  - id: rs.no-panic
+    severity: HIGH
+    description: Avoid the panic! macro which aborts execution
+    message: Do not use panic! in production
+    category: rust
+    pattern: "panic!(...)"
+  - id: rs.todo-comment
+    severity: LOW
+    description: Remove TODO comments
+    message: Avoid TODO comments
+    category: rust
+    pattern: "TODO"

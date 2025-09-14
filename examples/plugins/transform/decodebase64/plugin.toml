@@ -1,0 +1,10 @@
+name = "decodebase64"
+version = "1.0.0"
+api_version = "1.x"
+entry = "run.sh"
+capabilities = ["transform"]
+needs_content = false
+reads_fs = true
+timeout_ms = 5000
+mem_mb = 64
+config_schema = "schema.json"

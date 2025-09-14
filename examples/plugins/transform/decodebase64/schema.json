@@ -1,0 +1,15 @@
+{
+  "type": "object",
+  "properties": {
+    "mode": {
+      "type": "string",
+      "enum": ["safe", "aggressive"],
+      "default": "safe"
+    },
+    "min_len": {
+      "type": "integer",
+      "minimum": 4,
+      "default": 64
+    }
+  }
+}

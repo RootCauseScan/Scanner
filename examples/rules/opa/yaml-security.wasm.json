@@ -1,0 +1,10 @@
+{
+  "id": "opa.yaml.security",
+  "severity": "HIGH",
+  "category": "yaml",
+  "message": "YAML configuration security issues detected",
+  "entrypoint": "data.audit.yaml.deny",
+  "remediation": "Use secrets management and restrict container privileges",
+  "description": "Detects YAML security issues: plaintext passwords, default passwords, privileged containers, and unrestricted port exposure"
+}
+

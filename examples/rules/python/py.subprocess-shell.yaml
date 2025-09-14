@@ -1,0 +1,7 @@
+rules:
+  - id: py.subprocess-shell
+    severity: MEDIUM
+    description: Avoid shell=True in subprocess calls
+    message: Avoid shell=True in subprocess calls
+    category: python
+    pattern: "subprocess.$F(..., shell=True)"

@@ -1,0 +1,15 @@
+[package]
+name = "ir"
+version = "1.0.0"
+edition = "2021"
+description = "Intermediate representation types for RootCause"
+readme = "README.md"
+license.workspace = true
+repository = "https://github.com/rootcausescan/scanner"
+homepage = "https://github.com/rootcausescan/scanner"
+keywords = ["security", "sast", "static-analysis"]
+categories = ["development-tools", "code-analysis"]
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }

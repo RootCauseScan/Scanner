@@ -1,0 +1,22 @@
+[package]
+name = "reporters"
+version = "1.0.0"
+edition = "2021"
+description = "Output reporters for RootCause results"
+readme = "README.md"
+license.workspace = true
+repository = "https://github.com/rootcausescan/scanner"
+homepage = "https://github.com/rootcausescan/scanner"
+keywords = ["security", "sast", "static-analysis"]
+categories = ["development-tools", "code-analysis"]
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+engine = { path = "../engine" }
+loader = { path = "../loader" }
+"serde-sarif" = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+blake3 = "1"

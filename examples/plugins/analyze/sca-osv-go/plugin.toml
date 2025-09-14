@@ -1,0 +1,14 @@
+name = "sca-osv-go"
+version = "1.0.0"
+api_version = "1.x"
+entry = "./plugin"
+capabilities = ["analyze"]
+needs_content = true
+reads_fs = false
+
+[install]
+steps = [
+  "go mod tidy",
+  "go build -o plugin main.go",
+  "chmod +x plugin"
+]

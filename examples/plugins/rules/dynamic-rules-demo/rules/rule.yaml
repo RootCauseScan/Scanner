@@ -1,0 +1,6 @@
+rules:
+  - id: sample.no-todo
+    message: Avoid TODO in code
+    severity: LOW
+    patterns:
+      - pattern: TODO

@@ -1,0 +1,22 @@
+rules:
+  - id: java.no-system-exit
+    severity: MEDIUM
+    description: Avoid using System.exit()
+    message: Do not use System.exit()
+    category: java
+    pattern: "System.exit(...)"
+  - id: java.no-runtime-exec
+    severity: HIGH
+    description: Avoid using Runtime.getRuntime().exec()
+    message: Avoid Runtime.getRuntime().exec()
+    category: java
+    pattern: "Runtime.getRuntime().exec(...)"
+  - id: java.no-class-forname
+    severity: MEDIUM
+    description: Avoid unsafe use of Class.forName
+    message: Avoid Class.forName with untrusted input
+    category: java
+    pattern: "Class.forName(...)"
+# Sanitizers recognized:
+# - StringEscapeUtils.escapeHtml
+# - org.apache.commons.text.StringEscapeUtils.escapeHtml

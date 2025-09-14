@@ -1,0 +1,6 @@
+defaults: &defaults
+  a: 1
+  b: 2
+foo:
+  <<: *defaults
+  b: 3

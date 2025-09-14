@@ -1,0 +1,13 @@
+rules:
+  - id: tf.no-public-acl
+    severity: MEDIUM
+    description: Avoid public S3 buckets
+    message: S3 bucket should not be public-read
+    category: terraform
+    pattern: "public-read"
+  - id: tf.no-wide-open-sg
+    severity: MEDIUM
+    description: Avoid 0.0.0.0/0 security rules
+    message: Security group allows ingress from anywhere
+    category: terraform
+    pattern: "0.0.0.0/0"

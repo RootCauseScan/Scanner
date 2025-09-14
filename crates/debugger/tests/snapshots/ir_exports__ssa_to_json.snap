@@ -1,0 +1,20 @@
+---
+source: crates/debugger/tests/ir_exports.rs
+assertion_line: 56
+expression: dfg.to_json().unwrap()
+---
+{
+  "nodes": [
+    {
+      "id": 8321675576559263580,
+      "name": "expr",
+      "kind": "Param",
+      "sanitized": false,
+      "branch": null
+    }
+  ],
+  "edges": [],
+  "calls": [],
+  "call_returns": [],
+  "merges": []
+}

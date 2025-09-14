@@ -1,0 +1,9 @@
+---
+source: crates/debugger/tests/events.rs
+expression: sink.output()
+---
+{"kind":"RuleCompiled","path":null,"file":null,"rule_id":"py.no-exec","matched":null}
+{"kind":"ParseStart","path":"bad.py","file":null,"rule_id":null,"matched":null}
+{"kind":"ParseEnd","path":"bad.py","file":null,"rule_id":null,"matched":null}
+{"kind":"MatchAttempt","path":null,"file":"bad.py","rule_id":"py.no-exec","matched":null}
+{"kind":"MatchResult","path":null,"file":"bad.py","rule_id":"py.no-exec","matched":true}

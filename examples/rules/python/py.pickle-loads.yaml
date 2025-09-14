@@ -1,0 +1,7 @@
+rules:
+  - id: py.pickle-loads
+    severity: MEDIUM
+    description: Avoid using pickle.loads on untrusted data
+    message: Avoid pickle.loads on untrusted data
+    category: python
+    pattern: "pickle.loads(...)"

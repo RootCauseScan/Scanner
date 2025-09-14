@@ -1,0 +1,9 @@
+rules:
+  - id: examples.metavariable-pattern
+    message: Print of user input
+    severity: LOW
+    patterns:
+      - pattern: print($X)
+      - metavariable-pattern:
+          metavariable: $X
+          pattern: input(...)

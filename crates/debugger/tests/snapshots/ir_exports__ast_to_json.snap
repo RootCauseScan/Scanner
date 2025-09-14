@@ -1,0 +1,888 @@
+---
+source: crates/debugger/tests/ir_exports.rs
+assertion_line: 26
+expression: ast.to_json().unwrap()
+---
+{
+  "file_path": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+  "file_type": "python",
+  "nodes": [
+    {
+      "id": 0,
+      "parent": null,
+      "kind": "FunctionDefinition",
+      "value": "unsafe",
+      "children": [
+        {
+          "id": 1,
+          "parent": 0,
+          "kind": "Def",
+          "value": null,
+          "children": [],
+          "meta": {
+            "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+            "line": 1,
+            "column": 1
+          }
+        },
+        {
+          "id": 2,
+          "parent": 0,
+          "kind": "Identifier",
+          "value": null,
+          "children": [],
+          "meta": {
+            "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+            "line": 1,
+            "column": 5
+          }
+        },
+        {
+          "id": 3,
+          "parent": 0,
+          "kind": "Parameters",
+          "value": null,
+          "children": [
+            {
+              "id": 4,
+              "parent": 3,
+              "kind": "(",
+              "value": null,
+              "children": [],
+              "meta": {
+                "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+                "line": 1,
+                "column": 11
+              }
+            },
+            {
+              "id": 5,
+              "parent": 3,
+              "kind": "Identifier",
+              "value": null,
+              "children": [],
+              "meta": {
+                "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+                "line": 1,
+                "column": 12
+              }
+            },
+            {
+              "id": 6,
+              "parent": 3,
+              "kind": ")",
+              "value": null,
+              "children": [],
+              "meta": {
+                "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+                "line": 1,
+                "column": 16
+              }
+            }
+          ],
+          "meta": {
+            "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+            "line": 1,
+            "column": 11
+          }
+        },
+        {
+          "id": 7,
+          "parent": 0,
+          "kind": ":",
+          "value": null,
+          "children": [],
+          "meta": {
+            "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+            "line": 1,
+            "column": 17
+          }
+        },
+        {
+          "id": 8,
+          "parent": 0,
+          "kind": "Block",
+          "value": null,
+          "children": [
+            {
+              "id": 9,
+              "parent": 8,
+              "kind": "ExpressionStatement",
+              "value": null,
+              "children": [
+                {
+                  "id": 10,
+                  "parent": 9,
+                  "kind": "Call",
+                  "value": "eval",
+                  "children": [
+                    {
+                      "id": 11,
+                      "parent": 10,
+                      "kind": "Identifier",
+                      "value": null,
+                      "children": [],
+                      "meta": {
+                        "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+                        "line": 2,
+                        "column": 5
+                      }
+                    },
+                    {
+                      "id": 12,
+                      "parent": 10,
+                      "kind": "ArgumentList",
+                      "value": null,
+                      "children": [
+                        {
+                          "id": 13,
+                          "parent": 12,
+                          "kind": "(",
+                          "value": null,
+                          "children": [],
+                          "meta": {
+                            "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+                            "line": 2,
+                            "column": 9
+                          }
+                        },
+                        {
+                          "id": 14,
+                          "parent": 12,
+                          "kind": "Identifier",
+                          "value": null,
+                          "children": [],
+                          "meta": {
+                            "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+                            "line": 2,
+                            "column": 10
+                          }
+                        },
+                        {
+                          "id": 15,
+                          "parent": 12,
+                          "kind": ")",
+                          "value": null,
+                          "children": [],
+                          "meta": {
+                            "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+                            "line": 2,
+                            "column": 14
+                          }
+                        }
+                      ],
+                      "meta": {
+                        "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+                        "line": 2,
+                        "column": 9
+                      }
+                    }
+                  ],
+                  "meta": {
+                    "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+                    "line": 2,
+                    "column": 5
+                  }
+                }
+              ],
+              "meta": {
+                "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+                "line": 2,
+                "column": 5
+              }
+            }
+          ],
+          "meta": {
+            "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+            "line": 2,
+            "column": 5
+          }
+        }
+      ],
+      "meta": {
+        "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+        "line": 1,
+        "column": 1
+      }
+    }
+  ],
+  "index": [
+    {
+      "id": 0,
+      "parent": null,
+      "kind": "FunctionDefinition",
+      "value": "unsafe",
+      "children": [
+        {
+          "id": 1,
+          "parent": 0,
+          "kind": "Def",
+          "value": null,
+          "children": [],
+          "meta": {
+            "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+            "line": 1,
+            "column": 1
+          }
+        },
+        {
+          "id": 2,
+          "parent": 0,
+          "kind": "Identifier",
+          "value": null,
+          "children": [],
+          "meta": {
+            "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+            "line": 1,
+            "column": 5
+          }
+        },
+        {
+          "id": 3,
+          "parent": 0,
+          "kind": "Parameters",
+          "value": null,
+          "children": [
+            {
+              "id": 4,
+              "parent": 3,
+              "kind": "(",
+              "value": null,
+              "children": [],
+              "meta": {
+                "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+                "line": 1,
+                "column": 11
+              }
+            },
+            {
+              "id": 5,
+              "parent": 3,
+              "kind": "Identifier",
+              "value": null,
+              "children": [],
+              "meta": {
+                "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+                "line": 1,
+                "column": 12
+              }
+            },
+            {
+              "id": 6,
+              "parent": 3,
+              "kind": ")",
+              "value": null,
+              "children": [],
+              "meta": {
+                "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+                "line": 1,
+                "column": 16
+              }
+            }
+          ],
+          "meta": {
+            "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+            "line": 1,
+            "column": 11
+          }
+        },
+        {
+          "id": 7,
+          "parent": 0,
+          "kind": ":",
+          "value": null,
+          "children": [],
+          "meta": {
+            "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+            "line": 1,
+            "column": 17
+          }
+        },
+        {
+          "id": 8,
+          "parent": 0,
+          "kind": "Block",
+          "value": null,
+          "children": [
+            {
+              "id": 9,
+              "parent": 8,
+              "kind": "ExpressionStatement",
+              "value": null,
+              "children": [
+                {
+                  "id": 10,
+                  "parent": 9,
+                  "kind": "Call",
+                  "value": "eval",
+                  "children": [
+                    {
+                      "id": 11,
+                      "parent": 10,
+                      "kind": "Identifier",
+                      "value": null,
+                      "children": [],
+                      "meta": {
+                        "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+                        "line": 2,
+                        "column": 5
+                      }
+                    },
+                    {
+                      "id": 12,
+                      "parent": 10,
+                      "kind": "ArgumentList",
+                      "value": null,
+                      "children": [
+                        {
+                          "id": 13,
+                          "parent": 12,
+                          "kind": "(",
+                          "value": null,
+                          "children": [],
+                          "meta": {
+                            "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+                            "line": 2,
+                            "column": 9
+                          }
+                        },
+                        {
+                          "id": 14,
+                          "parent": 12,
+                          "kind": "Identifier",
+                          "value": null,
+                          "children": [],
+                          "meta": {
+                            "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+                            "line": 2,
+                            "column": 10
+                          }
+                        },
+                        {
+                          "id": 15,
+                          "parent": 12,
+                          "kind": ")",
+                          "value": null,
+                          "children": [],
+                          "meta": {
+                            "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+                            "line": 2,
+                            "column": 14
+                          }
+                        }
+                      ],
+                      "meta": {
+                        "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+                        "line": 2,
+                        "column": 9
+                      }
+                    }
+                  ],
+                  "meta": {
+                    "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+                    "line": 2,
+                    "column": 5
+                  }
+                }
+              ],
+              "meta": {
+                "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+                "line": 2,
+                "column": 5
+              }
+            }
+          ],
+          "meta": {
+            "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+            "line": 2,
+            "column": 5
+          }
+        }
+      ],
+      "meta": {
+        "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+        "line": 1,
+        "column": 1
+      }
+    },
+    {
+      "id": 1,
+      "parent": 0,
+      "kind": "Def",
+      "value": null,
+      "children": [],
+      "meta": {
+        "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+        "line": 1,
+        "column": 1
+      }
+    },
+    {
+      "id": 2,
+      "parent": 0,
+      "kind": "Identifier",
+      "value": null,
+      "children": [],
+      "meta": {
+        "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+        "line": 1,
+        "column": 5
+      }
+    },
+    {
+      "id": 3,
+      "parent": 0,
+      "kind": "Parameters",
+      "value": null,
+      "children": [
+        {
+          "id": 4,
+          "parent": 3,
+          "kind": "(",
+          "value": null,
+          "children": [],
+          "meta": {
+            "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+            "line": 1,
+            "column": 11
+          }
+        },
+        {
+          "id": 5,
+          "parent": 3,
+          "kind": "Identifier",
+          "value": null,
+          "children": [],
+          "meta": {
+            "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+            "line": 1,
+            "column": 12
+          }
+        },
+        {
+          "id": 6,
+          "parent": 3,
+          "kind": ")",
+          "value": null,
+          "children": [],
+          "meta": {
+            "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+            "line": 1,
+            "column": 16
+          }
+        }
+      ],
+      "meta": {
+        "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+        "line": 1,
+        "column": 11
+      }
+    },
+    {
+      "id": 4,
+      "parent": 3,
+      "kind": "(",
+      "value": null,
+      "children": [],
+      "meta": {
+        "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+        "line": 1,
+        "column": 11
+      }
+    },
+    {
+      "id": 5,
+      "parent": 3,
+      "kind": "Identifier",
+      "value": null,
+      "children": [],
+      "meta": {
+        "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+        "line": 1,
+        "column": 12
+      }
+    },
+    {
+      "id": 6,
+      "parent": 3,
+      "kind": ")",
+      "value": null,
+      "children": [],
+      "meta": {
+        "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+        "line": 1,
+        "column": 16
+      }
+    },
+    {
+      "id": 7,
+      "parent": 0,
+      "kind": ":",
+      "value": null,
+      "children": [],
+      "meta": {
+        "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+        "line": 1,
+        "column": 17
+      }
+    },
+    {
+      "id": 8,
+      "parent": 0,
+      "kind": "Block",
+      "value": null,
+      "children": [
+        {
+          "id": 9,
+          "parent": 8,
+          "kind": "ExpressionStatement",
+          "value": null,
+          "children": [
+            {
+              "id": 10,
+              "parent": 9,
+              "kind": "Call",
+              "value": "eval",
+              "children": [
+                {
+                  "id": 11,
+                  "parent": 10,
+                  "kind": "Identifier",
+                  "value": null,
+                  "children": [],
+                  "meta": {
+                    "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+                    "line": 2,
+                    "column": 5
+                  }
+                },
+                {
+                  "id": 12,
+                  "parent": 10,
+                  "kind": "ArgumentList",
+                  "value": null,
+                  "children": [
+                    {
+                      "id": 13,
+                      "parent": 12,
+                      "kind": "(",
+                      "value": null,
+                      "children": [],
+                      "meta": {
+                        "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+                        "line": 2,
+                        "column": 9
+                      }
+                    },
+                    {
+                      "id": 14,
+                      "parent": 12,
+                      "kind": "Identifier",
+                      "value": null,
+                      "children": [],
+                      "meta": {
+                        "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+                        "line": 2,
+                        "column": 10
+                      }
+                    },
+                    {
+                      "id": 15,
+                      "parent": 12,
+                      "kind": ")",
+                      "value": null,
+                      "children": [],
+                      "meta": {
+                        "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+                        "line": 2,
+                        "column": 14
+                      }
+                    }
+                  ],
+                  "meta": {
+                    "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+                    "line": 2,
+                    "column": 9
+                  }
+                }
+              ],
+              "meta": {
+                "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+                "line": 2,
+                "column": 5
+              }
+            }
+          ],
+          "meta": {
+            "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+            "line": 2,
+            "column": 5
+          }
+        }
+      ],
+      "meta": {
+        "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+        "line": 2,
+        "column": 5
+      }
+    },
+    {
+      "id": 9,
+      "parent": 8,
+      "kind": "ExpressionStatement",
+      "value": null,
+      "children": [
+        {
+          "id": 10,
+          "parent": 9,
+          "kind": "Call",
+          "value": "eval",
+          "children": [
+            {
+              "id": 11,
+              "parent": 10,
+              "kind": "Identifier",
+              "value": null,
+              "children": [],
+              "meta": {
+                "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+                "line": 2,
+                "column": 5
+              }
+            },
+            {
+              "id": 12,
+              "parent": 10,
+              "kind": "ArgumentList",
+              "value": null,
+              "children": [
+                {
+                  "id": 13,
+                  "parent": 12,
+                  "kind": "(",
+                  "value": null,
+                  "children": [],
+                  "meta": {
+                    "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+                    "line": 2,
+                    "column": 9
+                  }
+                },
+                {
+                  "id": 14,
+                  "parent": 12,
+                  "kind": "Identifier",
+                  "value": null,
+                  "children": [],
+                  "meta": {
+                    "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+                    "line": 2,
+                    "column": 10
+                  }
+                },
+                {
+                  "id": 15,
+                  "parent": 12,
+                  "kind": ")",
+                  "value": null,
+                  "children": [],
+                  "meta": {
+                    "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+                    "line": 2,
+                    "column": 14
+                  }
+                }
+              ],
+              "meta": {
+                "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+                "line": 2,
+                "column": 9
+              }
+            }
+          ],
+          "meta": {
+            "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+            "line": 2,
+            "column": 5
+          }
+        }
+      ],
+      "meta": {
+        "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+        "line": 2,
+        "column": 5
+      }
+    },
+    {
+      "id": 10,
+      "parent": 9,
+      "kind": "Call",
+      "value": "eval",
+      "children": [
+        {
+          "id": 11,
+          "parent": 10,
+          "kind": "Identifier",
+          "value": null,
+          "children": [],
+          "meta": {
+            "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+            "line": 2,
+            "column": 5
+          }
+        },
+        {
+          "id": 12,
+          "parent": 10,
+          "kind": "ArgumentList",
+          "value": null,
+          "children": [
+            {
+              "id": 13,
+              "parent": 12,
+              "kind": "(",
+              "value": null,
+              "children": [],
+              "meta": {
+                "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+                "line": 2,
+                "column": 9
+              }
+            },
+            {
+              "id": 14,
+              "parent": 12,
+              "kind": "Identifier",
+              "value": null,
+              "children": [],
+              "meta": {
+                "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+                "line": 2,
+                "column": 10
+              }
+            },
+            {
+              "id": 15,
+              "parent": 12,
+              "kind": ")",
+              "value": null,
+              "children": [],
+              "meta": {
+                "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+                "line": 2,
+                "column": 14
+              }
+            }
+          ],
+          "meta": {
+            "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+            "line": 2,
+            "column": 9
+          }
+        }
+      ],
+      "meta": {
+        "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+        "line": 2,
+        "column": 5
+      }
+    },
+    {
+      "id": 11,
+      "parent": 10,
+      "kind": "Identifier",
+      "value": null,
+      "children": [],
+      "meta": {
+        "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+        "line": 2,
+        "column": 5
+      }
+    },
+    {
+      "id": 12,
+      "parent": 10,
+      "kind": "ArgumentList",
+      "value": null,
+      "children": [
+        {
+          "id": 13,
+          "parent": 12,
+          "kind": "(",
+          "value": null,
+          "children": [],
+          "meta": {
+            "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+            "line": 2,
+            "column": 9
+          }
+        },
+        {
+          "id": 14,
+          "parent": 12,
+          "kind": "Identifier",
+          "value": null,
+          "children": [],
+          "meta": {
+            "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+            "line": 2,
+            "column": 10
+          }
+        },
+        {
+          "id": 15,
+          "parent": 12,
+          "kind": ")",
+          "value": null,
+          "children": [],
+          "meta": {
+            "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+            "line": 2,
+            "column": 14
+          }
+        }
+      ],
+      "meta": {
+        "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+        "line": 2,
+        "column": 9
+      }
+    },
+    {
+      "id": 13,
+      "parent": 12,
+      "kind": "(",
+      "value": null,
+      "children": [],
+      "meta": {
+        "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+        "line": 2,
+        "column": 9
+      }
+    },
+    {
+      "id": 14,
+      "parent": 12,
+      "kind": "Identifier",
+      "value": null,
+      "children": [],
+      "meta": {
+        "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+        "line": 2,
+        "column": 10
+      }
+    },
+    {
+      "id": 15,
+      "parent": 12,
+      "kind": ")",
+      "value": null,
+      "children": [],
+      "meta": {
+        "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+        "line": 2,
+        "column": 14
+      }
+    }
+  ]
+}

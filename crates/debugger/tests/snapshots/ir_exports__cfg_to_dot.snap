@@ -1,0 +1,7 @@
+---
+source: crates/debugger/tests/ir_exports.rs
+expression: cfg.to_dot()
+---
+digraph CFG {
+    0 [label="2:eval(expr)"];
+}

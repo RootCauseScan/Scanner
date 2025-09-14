@@ -1,0 +1,37 @@
+---
+source: crates/debugger/tests/ir_exports.rs
+expression: ast.to_dot()
+---
+digraph AST {
+    0 [label="FunctionDefinition:unsafe"];
+    0 -> 1;
+    0 -> 2;
+    0 -> 3;
+    0 -> 7;
+    0 -> 8;
+    1 [label="Def"];
+    2 [label="Identifier"];
+    3 [label="Parameters"];
+    3 -> 4;
+    3 -> 5;
+    3 -> 6;
+    4 [label="("];
+    5 [label="Identifier"];
+    6 [label=")"];
+    7 [label=":"];
+    8 [label="Block"];
+    8 -> 9;
+    9 [label="ExpressionStatement"];
+    9 -> 10;
+    10 [label="Call:eval"];
+    10 -> 11;
+    10 -> 12;
+    11 [label="Identifier"];
+    12 [label="ArgumentList"];
+    12 -> 13;
+    12 -> 14;
+    12 -> 15;
+    13 [label="("];
+    14 [label="Identifier"];
+    15 [label=")"];
+}

@@ -1,0 +1,13 @@
+rules:
+  - id: yaml.no-plaintext-password
+    severity: MEDIUM
+    description: Avoid plaintext passwords
+    message: Avoid hardcoded passwords
+    category: yaml
+    pattern: "password:"
+  - id: yaml.no-privileged
+    severity: MEDIUM
+    description: Avoid privileged mode
+    message: Avoid privileged true
+    category: yaml
+    pattern: "privileged: true"
