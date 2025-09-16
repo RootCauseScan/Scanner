@@ -197,6 +197,13 @@ pub fn parse_java(content: &str, fir: &mut FileIR) -> Result<()> {
                 }
                 return;
             }
+            "object_creation_expression" => {
+                // Handle constructor arguments like "new URL(urlImage)"
+                if let Some(args) = node.child_by_field_name("arguments") {
+                    gather_ids(args, src, out);
+                }
+                return;
+            }
             _ => {}
         }
         let mut cursor = node.walk();
@@ -288,6 +295,42 @@ pub fn parse_java(content: &str, fir: &mut FileIR) -> Result<()> {
                                 column: pos.column + 1,
                             },
                         });
+                    }
+                }
+            }
+            "object_creation_expression" => {
+                // Handle constructor calls like "new URL(...)"
+                if let Some(type_node) = node.child_by_field_name("type") {
+                    if let Ok(type_name) = type_node.utf8_text(src.as_bytes()) {
+                        let pos = node.start_position();
+                        // Generate path in format that matches Semgrep patterns like "new URL"
+                        let path = format!("new {}", type_name);
+                        fir.push(IRNode {
+                            id: 0,
+                            kind: "java".into(),
+                            path: format!("call.{path}"),
+                            value: serde_json::Value::Null,
+                            meta: Meta {
+                                file: fir.file_path.clone(),
+                                line: pos.row + 1,
+                                column: pos.column + 1,
+                            },
+                        });
+                        // Also resolve imports for the constructor
+                        for full in resolve_import(type_name, imports, wildcards) {
+                            let full_path = format!("new {}", full);
+                            fir.push(IRNode {
+                                id: 0,
+                                kind: "java".into(),
+                                path: format!("call.{full_path}"),
+                                value: serde_json::Value::Null,
+                                meta: Meta {
+                                    file: fir.file_path.clone(),
+                                    line: pos.row + 1,
+                                    column: pos.column + 1,
+                                },
+                            });
+                        }
                     }
                 }
             }
@@ -1316,6 +1359,47 @@ pub fn parse_java(content: &str, fir: &mut FileIR) -> Result<()> {
                                 if let Some(cid) = callee {
                                     call_args.push((def_id, cid, idx));
                                 }
+                            }
+                        }
+                    }
+                }
+            }
+            "object_creation_expression" => {
+                // Handle constructor calls like "new URL(...)" for data flow
+                if let Some(args) = node.child_by_field_name("arguments") {
+                    let mut cursor = args.walk();
+                    for (idx, arg) in args
+                        .children(&mut cursor)
+                        .filter(|n| n.is_named())
+                        .enumerate()
+                    {
+                        if arg.kind() == "lambda_expression" || arg.kind() == "method_reference" {
+                            continue;
+                        }
+                        let mut vars = Vec::new();
+                        gather_ids(arg, src, &mut vars);
+                        for var in vars {
+                            let canonical = resolve_alias(&var, &fir.symbols);
+                            let sanitized = find_symbol(&canonical, &fir.symbols)
+                                .map(|s| s.sanitized)
+                                .unwrap_or(false);
+                            let dfg = fir.dfg.get_or_insert_with(DataFlowGraph::default);
+                            let id = dfg.nodes.len();
+                            dfg.nodes.push(DFNode {
+                                id,
+                                name: var.to_string(),
+                                kind: DFNodeKind::Use,
+                                sanitized,
+                                branch: branch_stack.last().copied(),
+                            });
+                            if let Some(def_id) =
+                                find_symbol(&var, &fir.symbols).and_then(|s| s.def)
+                            {
+                                dfg.edges.push((def_id, id));
+                            } else if let Some(def_id) =
+                                find_symbol(&canonical, &fir.symbols).and_then(|s| s.def)
+                            {
+                                dfg.edges.push((def_id, id));
                             }
                         }
                     }
