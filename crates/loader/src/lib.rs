@@ -189,7 +189,34 @@ pub enum AnyRegex {
     Fancy(FancyRegex),
 }
 
+pub mod regex_ext {
+    pub type Regex = crate::AnyRegex;
+}
+
+pub struct AnyMatch<'a> {
+    text: &'a str,
+}
+
+impl<'a> AnyMatch<'a> {
+    pub fn as_str(&self) -> &'a str {
+        self.text
+    }
+}
+
+pub struct AnyCaptures<'a> {
+    get_fn: Box<dyn Fn(usize) -> Option<AnyMatch<'a>> + 'a>,
+}
+
+impl<'a> AnyCaptures<'a> {
+    pub fn get(&self, idx: usize) -> Option<AnyMatch<'a>> {
+        (self.get_fn)(idx)
+    }
+}
+
 impl AnyRegex {
+    pub fn is_fancy(&self) -> bool {
+        matches!(self, Self::Fancy(_))
+    }
     pub fn is_match(&self, text: &str) -> bool {
         match self {
             Self::Std(r) => r.is_match(text),
@@ -208,6 +235,22 @@ impl AnyRegex {
                     .filter_map(|m| m.ok())
                     .map(|m| (m.start(), m.end())),
             ),
+        }
+    }
+
+    pub fn captures<'a>(&'a self, text: &'a str) -> Option<AnyCaptures<'a>> {
+        match self {
+            Self::Std(r) => r.captures(text).map(|caps| {
+                AnyCaptures {
+                    get_fn: Box::new(move |idx| caps.get(idx).map(|m| AnyMatch { text: m.as_str() })),
+                }
+            }),
+            Self::Fancy(r) => match r.captures(text) {
+                Ok(Some(caps)) => Some(AnyCaptures {
+                    get_fn: Box::new(move |idx| caps.get(idx).map(|m| AnyMatch { text: m.as_str() })),
+                }),
+                _ => None,
+            },
         }
     }
 }
@@ -238,9 +281,9 @@ pub enum MatcherKind {
     /// Multiple allow/deny expressions evaluated in the same file.
     TextRegexMulti {
         allow: Vec<(AnyRegex, String)>,
-        deny: Option<Regex>,
-        inside: Vec<Regex>,
-        not_inside: Vec<Regex>,
+        deny: Option<AnyRegex>,
+        inside: Vec<AnyRegex>,
+        not_inside: Vec<AnyRegex>,
     },
     /// Exact comparison of a JSON value in a path.
     JsonPathEq(String, JsonValue),
@@ -538,7 +581,8 @@ fn compile_yaml_rule(
         .map(|p| p.to_string_lossy().to_string());
     if let Some(patterns) = yr.patterns.clone() {
         for p in patterns {
-            let re = Regex::new(&p.pattern)?;
+            // Use FancyRegex to support look-around in user regex patterns
+            let re = FancyRegex::new(&p.pattern)?;
             rs.rules.push(CompiledRule {
                 id: yr.id.clone(),
                 severity,
@@ -547,10 +591,7 @@ fn compile_yaml_rule(
                 remediation: remediation.clone(),
                 fix: fix.clone(),
                 interfile: yr.options.interfile,
-                matcher: MatcherKind::TextRegex(
-                    re.into(),
-                    String::new(), /*scope for dockerfile instr name*/
-                ),
+                matcher: MatcherKind::TextRegex(re.into(), String::new()),
                 source_file: source_file.clone(),
                 sources: Vec::new(),
                 sinks: Vec::new(),
@@ -709,7 +750,14 @@ pub fn semgrep_to_regex(pattern: &str, mv: &HashMap<String, String>) -> String {
         p.push_str(&esc(&pattern[last..m.start()]));
         let var = &pattern[m.start() + 1..m.end()];
         if let Some(r) = mv.get(var) {
-            let r = r.trim_start_matches('^').trim_end_matches('$');
+            // Support PCRE-style anchors used in some Semgrep rules
+            // by translating \A/\Z/\z to ^/$ which are supported
+            // by the Rust regex engines we use.
+            let anchored = r
+                .replace("\\A", "^")
+                .replace("\\Z", "$")
+                .replace("\\z", "$");
+            let r = anchored.trim_start_matches('^').trim_end_matches('$');
             p.push_str(&format!("({r})"));
         } else {
             p.push_str("[^\n]*?");
@@ -743,7 +791,11 @@ pub fn semgrep_to_regex_exact(pattern: &str, mv: &HashMap<String, String>) -> St
         p.push_str(&esc(&pattern[last..m.start()]));
         let var = &pattern[m.start() + 1..m.end()];
         if let Some(r) = mv.get(var) {
-            let r = r.trim_start_matches('^').trim_end_matches('$');
+            let anchored = r
+                .replace("\\A", "^")
+                .replace("\\Z", "$")
+                .replace("\\z", "$");
+            let r = anchored.trim_start_matches('^').trim_end_matches('$');
             p.push_str(&format!("({r})"));
         } else {
             p.push_str("[^\n]*?");
@@ -933,7 +985,7 @@ fn compile_taint_patterns(
             {
                 pattern
                     .allow
-                    .push(Regex::new(&semgrep_to_regex_exact(line, mv))?);
+                    .push(FancyRegex::new(&semgrep_to_regex_exact(line, mv))?.into());
             }
         }
         if let Some(p) = entry.get("pattern-inside").and_then(|v| v.as_str()) {
@@ -944,7 +996,7 @@ fn compile_taint_patterns(
             {
                 pattern
                     .inside
-                    .push(Regex::new(&semgrep_to_regex_exact(line, mv))?);
+                    .push(FancyRegex::new(&semgrep_to_regex_exact(line, mv))?.into());
             }
         }
         if let Some(p) = entry.get("pattern-not-inside").and_then(|v| v.as_str()) {
@@ -955,7 +1007,7 @@ fn compile_taint_patterns(
             {
                 pattern
                     .not_inside
-                    .push(Regex::new(&semgrep_to_regex_exact(line, mv))?);
+                    .push(FancyRegex::new(&semgrep_to_regex_exact(line, mv))?.into());
             }
         }
         if let Some(n) = entry.get("pattern-not").and_then(|v| v.as_str()) {
@@ -965,7 +1017,7 @@ fn compile_taint_patterns(
                 .filter(|l| !l.is_empty() && *l != "...")
                 .collect::<Vec<_>>()
                 .join("\n");
-            pattern.deny = Some(Regex::new(&semgrep_to_regex_exact(&combined, mv))?);
+            pattern.deny = Some(FancyRegex::new(&semgrep_to_regex_exact(&combined, mv))?.into());
         }
         if let Some(arr) = entry.get("pattern-either").and_then(|v| v.as_sequence()) {
             for item in arr {
@@ -1030,6 +1082,12 @@ fn compile_semgrep_rule(
                 let mut tp = compile_taint_patterns(seq, &mv)?;
                 tp.focus = _focus.clone();
                 sources.push(tp);
+            } else if src.get("pattern-either").is_some() || src.get("pattern").is_some() {
+                // Handle single pattern or pattern-either directly
+                let single_item = vec![src];
+                let mut tp = compile_taint_patterns(&single_item, &mv)?;
+                tp.focus = _focus.clone();
+                sources.push(tp);
             }
         }
     }
@@ -1041,6 +1099,12 @@ fn compile_semgrep_rule(
                 let mut tp = compile_taint_patterns(seq, &mv)?;
                 tp.focus = _focus.clone();
                 sanitizers.push(tp);
+            } else if san.get("pattern-either").is_some() || san.get("pattern").is_some() {
+                // Handle single pattern or pattern-either directly
+                let single_item = vec![san];
+                let mut tp = compile_taint_patterns(&single_item, &mv)?;
+                tp.focus = _focus.clone();
+                sanitizers.push(tp);
             }
         }
     }
@@ -1050,6 +1114,10 @@ fn compile_semgrep_rule(
         for snk in arr {
             if let Some(seq) = snk.get("patterns").and_then(|v| v.as_sequence()) {
                 sinks.push(compile_taint_patterns(seq, &mv)?);
+            } else if snk.get("pattern-either").is_some() || snk.get("pattern").is_some() {
+                // Handle single pattern or pattern-either directly
+                let single_item = vec![snk];
+                sinks.push(compile_taint_patterns(&single_item, &mv)?);
             }
         }
     }
@@ -1059,6 +1127,10 @@ fn compile_semgrep_rule(
         for rc in arr {
             if let Some(seq) = rc.get("patterns").and_then(|v| v.as_sequence()) {
                 reclass.push(compile_taint_patterns(seq, &mv)?);
+            } else if rc.get("pattern-either").is_some() || rc.get("pattern").is_some() {
+                // Handle single pattern or pattern-either directly
+                let single_item = vec![rc];
+                reclass.push(compile_taint_patterns(&single_item, &mv)?);
             }
         }
     }
@@ -1102,10 +1174,8 @@ fn compile_semgrep_rule(
                         .map(|l| l.trim())
                         .filter(|l| !l.is_empty() && *l != "...")
                     {
-                        allow.push((
-                            Regex::new(&semgrep_to_regex_exact(line, &mv))?.into(),
-                            line.to_string(),
-                        ));
+                        let re_str = semgrep_to_regex_exact(line, &mv);
+                        allow.push((FancyRegex::new(&re_str)?.into(), line.to_string()));
                     }
                 }
                 PatternKind::Inside => {
@@ -1117,7 +1187,7 @@ fn compile_semgrep_rule(
                         .join("\n");
                     let mut re = semgrep_to_regex_exact(&combined, &mv);
                     re = re.replacen("(?s)", "(?ms)^", 1);
-                    inside.push(Regex::new(&re)?);
+                    inside.push(FancyRegex::new(&re)?.into());
                 }
                 PatternKind::NotInside => {
                     let combined: String = pat
@@ -1128,7 +1198,7 @@ fn compile_semgrep_rule(
                         .join("\n");
                     let mut re = semgrep_to_regex_exact(&combined, &mv);
                     re = re.replacen("(?s)", "(?ms)^", 1);
-                    not_inside.push(Regex::new(&re)?);
+                    not_inside.push(FancyRegex::new(&re)?.into());
                 }
                 PatternKind::Not => {
                     let combined: String = pat
@@ -1152,7 +1222,7 @@ fn compile_semgrep_rule(
                     .collect();
                 let joined = cleaned.join(")|(?:");
                 let big = format!("(?s)(?:{})", joined);
-                Some(Regex::new(&big)?)} else { None };
+                Some(FancyRegex::new(&big)?.into())} else { None };
             rs.rules.push(CompiledRule {
                 id: sr.id,
                 severity,
@@ -1173,7 +1243,7 @@ fn compile_semgrep_rule(
             });
         }
     } else if let Some(p) = sr.pattern {
-        let re = Regex::new(&semgrep_to_regex(&p, &mv))?;
+        let re = FancyRegex::new(&semgrep_to_regex(&p, &mv))?;
         rs.rules.push(CompiledRule {
             id: sr.id,
             severity,

@@ -3,7 +3,7 @@
 
 use ir::{AstNode, FileAst, FileIR};
 use loader::{
-    semgrep_to_regex, semgrep_to_regex_exact, AstPattern as LoaderAstPattern,
+    semgrep_to_regex, semgrep_to_regex_exact, AnyRegex, AstPattern as LoaderAstPattern,
     MetaVar as LoaderMetaVar,
 };
 pub use loader::{CompiledRule, MatcherKind, RuleSet, Severity, TaintPattern};
@@ -34,6 +34,7 @@ mod function_taint;
 mod hash;
 pub mod pattern;
 pub mod plugin;
+pub mod regex_ext;
 pub use cache::AnalysisCache;
 pub use cfg::{build_cfg, has_unsanitized_route};
 pub use debug::{set_debug_sink, DebugEvent, DebugSink};
@@ -205,6 +206,8 @@ const WASM_FUEL: u64 = 10_000_000;
 const WASM_MEMORY: usize = 10 * 1024 * 1024; // 10MB
 const WASM_TIMEOUT: Duration = Duration::from_secs(2);
 const AST_QUERY_TIMEOUT: Duration = Duration::from_millis(100);
+// Guard for fancy-regex scanning to avoid catastrophic backtracking
+const FANCY_REGEX_GUARD: Duration = Duration::from_millis(300);
 const AST_QUERY_MAX_NODES: usize = 10_000;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -302,6 +305,7 @@ pub fn rule_cache_stats() -> (usize, usize) {
 }
 
 fn eval_rule(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
+    debug!("eval_rule: Starting evaluation of rule '{}' for file '{}'", rule.id, file.file_path);
     let cache = RULE_CACHE.get_or_init(|| RwLock::new(HashMap::new()));
     let order = RULE_CACHE_ORDER.get_or_init(|| RwLock::new(VecDeque::new()));
     let stats = RULE_CACHE_STATS.get_or_init(Default::default);
@@ -323,7 +327,9 @@ fn eval_rule(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
     }
 
     stats.misses.fetch_add(1, Ordering::Relaxed);
+    debug!("eval_rule: Calling eval_rule_impl for rule '{}' and file '{}'", rule.id, file.file_path);
     let res = eval_rule_impl(file, rule);
+    debug!("eval_rule: eval_rule_impl completed for rule '{}' and file '{}', found {} findings", rule.id, file.file_path, res.len());
     let mut map = cache.write().unwrap_or_else(|e| e.into_inner());
     let mut ord = order.write().unwrap_or_else(|e| e.into_inner());
     map.insert(key.clone(), res.clone());
@@ -333,6 +339,7 @@ fn eval_rule(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
             map.remove(&oldest);
         }
     }
+    debug!("eval_rule: Completed evaluation of rule '{}' for file '{}'", rule.id, file.file_path);
     res
 }
 
@@ -341,6 +348,48 @@ fn regex_ranges(source: &str, regs: &[Regex]) -> Vec<(usize, usize)> {
     for re in regs {
         for m in re.find_iter(source) {
             ranges.push((m.start(), m.end()));
+        }
+    }
+    ranges
+}
+
+fn regex_ranges_any(source: &str, regs: &[AnyRegex]) -> Vec<(usize, usize)> {
+    let mut ranges = Vec::new();
+    for re in regs {
+        if re.is_fancy() {
+            // Use the same protection for fancy regex as in other places
+            let start_guard = Instant::now();
+            let mut offset = 0usize;
+            for seg in source.split_inclusive('\n') {
+                if start_guard.elapsed() > FANCY_REGEX_GUARD {
+                    debug!("regex_ranges_any: Aborting fancy regex scan due to guard timeout");
+                    break;
+                }
+                let mut match_count = 0;
+                for (ls, le) in re.find_iter(seg) {
+                    // Prevent infinite loops in fancy regex by limiting matches per segment
+                    match_count += 1;
+                    if match_count > 1000 {
+                        debug!("regex_ranges_any: Aborting fancy regex scan due to too many matches in segment");
+                        break;
+                    }
+                    
+                    // Check timeout more frequently within the iterator
+                    if start_guard.elapsed() > FANCY_REGEX_GUARD {
+                        debug!("regex_ranges_any: Aborting fancy regex scan due to guard timeout in iterator");
+                        break;
+                    }
+                    
+                    let s = offset + ls;
+                    let e = offset + le;
+                    ranges.push((s, e));
+                }
+                offset += seg.len();
+            }
+        } else {
+            for (s, e) in re.find_iter(source) {
+                ranges.push((s, e));
+            }
         }
     }
     ranges
@@ -441,11 +490,18 @@ fn analyze_file_inner(file: &FileIR, rules: &RuleSet) -> Vec<Finding> {
         file.file_path,
         rules.rules.len()
     );
+    debug!("Starting rule evaluation for file '{}'", file.file_path);
     let findings: Vec<Finding> = rules
         .rules
-        .par_iter()
-        .flat_map(|r| eval_rule(file, r))
+        .iter()
+        .flat_map(|r| {
+            debug!("Evaluating rule '{}' for file '{}'", r.id, file.file_path);
+            let result = eval_rule(file, r);
+            debug!("Rule '{}' evaluation completed for file '{}', found {} findings", r.id, file.file_path, result.len());
+            result
+        })
         .collect();
+    debug!("Rule evaluation completed for file '{}'", file.file_path);
     debug!(
         "File '{}' analysis completed, found {} findings",
         file.file_path,
@@ -458,10 +514,18 @@ fn analyze_files_inner(
     files: &[(String, &FileIR)],
     rules: &RuleSet,
 ) -> Vec<(String, Vec<Finding>)> {
-    files
-        .par_iter()
-        .map(|(h, f)| (h.clone(), analyze_file_inner(f, rules)))
-        .collect()
+    debug!("analyze_files_inner: Starting file processing for {} files", files.len());
+    let results: Vec<(String, Vec<Finding>)> = files
+        .iter()
+        .map(|(h, f)| {
+            debug!("analyze_files_inner: Processing file '{}'", h);
+            let findings = analyze_file_inner(f, rules);
+            debug!("analyze_files_inner: Completed processing file '{}', found {} findings", h, findings.len());
+            (h.clone(), findings)
+        })
+        .collect();
+    debug!("analyze_files_inner: Completed file processing");
+    results
 }
 
 pub fn analyze_files(
@@ -750,10 +814,12 @@ pub fn write_baseline(path: &Path, findings: &[Finding]) -> anyhow::Result<()> {
 }
 
 fn eval_rule_impl(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
+    debug!("eval_rule_impl: Starting implementation for rule '{}' and file '{}'", rule.id, file.file_path);
     emit(DebugEvent::MatchAttempt {
         rule_id: rule.id.clone(),
         file: PathBuf::from(&file.file_path),
     });
+    let rule_eval_start = Instant::now();
     #[cfg(test)]
     if rule.id == "slow.rule" {
         std::thread::sleep(Duration::from_millis(100));
@@ -762,6 +828,7 @@ fn eval_rule_impl(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
     let canonical = canonical_path.to_string_lossy();
     let findings = match &rule.matcher {
         MatcherKind::TextRegex(re, orig) => {
+            debug!(rule=%rule.id, file=%file.file_path, kind="TextRegex", fancy=re.is_fancy(), pat=%orig.chars().take(120).collect::<String>());
             let source = file.source.as_deref().unwrap_or("");
             let mut findings: Vec<Finding> = source
                 .lines()
@@ -841,76 +908,199 @@ fn eval_rule_impl(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
             inside,
             not_inside,
         } => {
+            debug!(rule=%rule.id, file=%file.file_path, kind="TextRegexMulti", allow=allow.len(), deny=deny.is_some(), inside=inside.len(), not_inside=not_inside.len());
             let source = file.source.as_deref().unwrap_or("");
             let mut findings = Vec::new();
-            let inside_ranges = regex_ranges(source, inside);
-            let not_inside_ranges = regex_ranges(source, not_inside);
+            let inside_ranges = regex_ranges_any(source, inside);
+            let not_inside_ranges = regex_ranges_any(source, not_inside);
             let aliases = use_aliases(file);
-            for (re, orig) in allow {
-                for (start, end) in re.find_iter(source) {
-                    if let Some(deny_re) = deny {
-                        if deny_re.is_match(&source[start..end]) {
+            for (idx, (re, orig)) in allow.iter().enumerate() {
+                if re.is_fancy() {
+                    debug!(
+                        rule = %rule.id,
+                        file = %file.file_path,
+                        idx,
+                        kind = "TextRegexMulti.allow",
+                        fancy = true,
+                        pat = %orig.chars().take(120).collect::<String>(),
+                        "Scanning fancy regex"
+                    );
+                }
+                // For fancy regexes (look-around), scan line by line to reduce catastrophic backtracking.
+                if re.is_fancy() {
+                    let start_guard = Instant::now();
+                    let mut offset = 0usize;
+                    for seg in source.split_inclusive('\n') {
+                        if start_guard.elapsed() > FANCY_REGEX_GUARD {
+                            debug!(
+                                rule = %rule.id,
+                                file = %file.file_path,
+                                idx,
+                                kind = "TextRegexMulti.allow",
+                                "Aborting fancy regex scan due to guard timeout"
+                            );
+                            break;
+                        }
+                        let mut match_count = 0;
+                        for (ls, le) in re.find_iter(seg) {
+                            // Prevent infinite loops in fancy regex by limiting matches per segment
+                            match_count += 1;
+                            if match_count > 1000 {
+                                debug!(
+                                    rule = %rule.id,
+                                    file = %file.file_path,
+                                    idx,
+                                    kind = "TextRegexMulti.allow",
+                                    "Aborting fancy regex scan due to too many matches in segment"
+                                );
+                                break;
+                            }
+                            
+                            // Check timeout more frequently within the iterator
+                            if start_guard.elapsed() > FANCY_REGEX_GUARD {
+                                debug!(
+                                    rule = %rule.id,
+                                    file = %file.file_path,
+                                    idx,
+                                    kind = "TextRegexMulti.allow",
+                                    "Aborting fancy regex scan due to guard timeout in iterator"
+                                );
+                                break;
+                            }
+                            
+                            let start = offset + ls;
+                            let end = offset + le;
+                            if let Some(deny_re) = deny {
+                                if deny_re.is_match(&source[start..end]) {
+                                    continue;
+                                }
+                            }
+                            if !inside_ranges.is_empty()
+                                && inside_ranges.iter().all(|(s, e)| start < *s || end > *e)
+                            {
+                                continue;
+                            }
+                            let block_match = || {
+                                not_inside.iter().any(|re| {
+                                    if let Some((s, e)) = enclosing_block(source, start) {
+                                        re.is_match(&source[s..e])
+                                    } else {
+                                        false
+                                    }
+                                })
+                            };
+                            let in_not_inside = if !not_inside_ranges.is_empty() {
+                                not_inside_ranges
+                                    .iter()
+                                    .any(|(s, e)| start >= *s && end <= *e)
+                                    || block_match()
+                            } else {
+                                block_match()
+                            };
+                            if in_not_inside {
+                                continue;
+                            }
+                            let mut line = 1;
+                            let mut line_start = 0;
+                            for (idx, ch) in source[..start].char_indices() {
+                                if ch == '\n' {
+                                    line += 1;
+                                    line_start = idx + 1;
+                                }
+                            }
+                            let column = start - line_start + 1;
+                            let line_end = source[end..]
+                                .find('\n')
+                                .map(|i| end + i)
+                                .unwrap_or_else(|| source.len());
+                            let excerpt = source[line_start..line_end].to_string();
+                            let id = blake3::hash(
+                                format!("{}:{}:{}:{}", rule.id, canonical, line, column).as_bytes(),
+                            )
+                            .to_hex()
+                            .to_string();
+                            findings.push(Finding {
+                                id,
+                                rule_id: rule.id.clone(),
+                                severity: rule.severity,
+                                file: PathBuf::from(&file.file_path),
+                                line,
+                                column,
+                                excerpt,
+                                message: rule.message.clone(),
+                                remediation: rule.remediation.clone(),
+                                fix: rule.fix.clone(),
+                            });
+                        }
+                        offset += seg.len();
+                    }
+                    // Try alias expansion path below too if needed
+                } else {
+                    for (start, end) in re.find_iter(source) {
+                        if let Some(deny_re) = deny {
+                            if deny_re.is_match(&source[start..end]) {
+                                continue;
+                            }
+                        }
+                        if !inside_ranges.is_empty()
+                            && inside_ranges
+                                .iter()
+                                .all(|(s, e)| start < *s || end > *e)
+                        {
                             continue;
                         }
-                    }
-                    if !inside_ranges.is_empty()
-                        && inside_ranges
-                            .iter()
-                            .all(|(s, e)| start < *s || end > *e)
-                    {
-                        continue;
-                    }
-                    let block_match = || {
-                        not_inside.iter().any(|re| {
-                            if let Some((s, e)) = enclosing_block(source, start) {
-                                re.is_match(&source[s..e])
-                            } else {
-                                false
-                            }
-                        })
-                    };
-                    let in_not_inside = if !not_inside_ranges.is_empty() {
-                        not_inside_ranges
-                            .iter()
-                            .any(|(s, e)| start >= *s && end <= *e)
-                            || block_match()
-                    } else {
-                        block_match()
-                    };
-                    if in_not_inside {
-                        continue;
-                    }
-                    let mut line = 1;
-                    let mut line_start = 0;
-                    for (idx, ch) in source[..start].char_indices() {
-                        if ch == '\n' {
-                            line += 1;
-                            line_start = idx + 1;
+                        let block_match = || {
+                            not_inside.iter().any(|re| {
+                                if let Some((s, e)) = enclosing_block(source, start) {
+                                    re.is_match(&source[s..e])
+                                } else {
+                                    false
+                                }
+                            })
+                        };
+                        let in_not_inside = if !not_inside_ranges.is_empty() {
+                            not_inside_ranges
+                                .iter()
+                                .any(|(s, e)| start >= *s && end <= *e)
+                                || block_match()
+                        } else {
+                            block_match()
+                        };
+                        if in_not_inside {
+                            continue;
                         }
+                        let mut line = 1;
+                        let mut line_start = 0;
+                        for (idx, ch) in source[..start].char_indices() {
+                            if ch == '\n' {
+                                line += 1;
+                                line_start = idx + 1;
+                            }
+                        }
+                        let column = start - line_start + 1;
+                        let line_end = source[end..]
+                            .find('\n')
+                            .map(|i| end + i)
+                            .unwrap_or_else(|| source.len());
+                        let excerpt = source[line_start..line_end].to_string();
+                        let id = blake3::hash(
+                            format!("{}:{}:{}:{}", rule.id, canonical, line, column).as_bytes(),
+                        )
+                        .to_hex()
+                        .to_string();
+                        findings.push(Finding {
+                            id,
+                            rule_id: rule.id.clone(),
+                            severity: rule.severity,
+                            file: PathBuf::from(&file.file_path),
+                            line,
+                            column,
+                            excerpt,
+                            message: rule.message.clone(),
+                            remediation: rule.remediation.clone(),
+                            fix: rule.fix.clone(),
+                        });
                     }
-                    let column = start - line_start + 1;
-                    let line_end = source[end..]
-                        .find('\n')
-                        .map(|i| end + i)
-                        .unwrap_or_else(|| source.len());
-                    let excerpt = source[line_start..line_end].to_string();
-                    let id = blake3::hash(
-                        format!("{}:{}:{}:{}", rule.id, canonical, line, column).as_bytes(),
-                    )
-                    .to_hex()
-                    .to_string();
-                    findings.push(Finding {
-                        id,
-                        rule_id: rule.id.clone(),
-                        severity: rule.severity,
-                        file: PathBuf::from(&file.file_path),
-                        line,
-                        column,
-                        excerpt,
-                        message: rule.message.clone(),
-                        remediation: rule.remediation.clone(),
-                        fix: rule.fix.clone(),
-                    });
                 }
                 if !orig.is_empty() {
                     let call_part = orig.split('(').next().unwrap_or("").trim();
@@ -999,12 +1189,15 @@ fn eval_rule_impl(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
             findings
         }
         MatcherKind::JsonPathEq(path, val) => {
+            debug!(rule=%rule.id, file=%file.file_path, kind="JsonPathEq", path=%path);
             jsonpath_findings(file, rule, canonical.as_ref(), path, Some(val), None)
         }
         MatcherKind::JsonPathRegex(path, re) => {
+            debug!(rule=%rule.id, file=%file.file_path, kind="JsonPathRegex", path=%path);
             jsonpath_findings(file, rule, canonical.as_ref(), path, None, Some(re))
         }
         MatcherKind::AstQuery(q) => {
+            debug!(rule=%rule.id, file=%file.file_path, kind="AstQuery");
             if let Some(ast) = &file.ast {
                 ast_query_findings(ast, rule, canonical.as_ref(), q)
             } else {
@@ -1012,6 +1205,7 @@ fn eval_rule_impl(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
             }
         }
         MatcherKind::AstPattern(p) => {
+            debug!(rule=%rule.id, file=%file.file_path, kind="AstPattern");
             let pat = into_engine_pattern(p);
             match_ast_pattern(file, &pat)
                 .into_iter()
@@ -1050,6 +1244,8 @@ fn eval_rule_impl(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
             reclass,
             sinks,
         } => {
+            debug!(rule=%rule.id, file=%file.file_path, kind="TaintRule", sources=sources.len(), sanitizers=sanitizers.len(), reclass=reclass.len(), sinks=sinks.len());
+            debug!("TaintRule: Starting processing for rule '{}' and file '{}'", rule.id, file.file_path);
             let source_text = file.source.as_deref().unwrap_or("");
             let tracker = if !rule.sources.is_empty() && !rule.sinks.is_empty() {
                 let graph = dataflow::get_call_graph();
@@ -1064,57 +1260,142 @@ fn eval_rule_impl(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
             } else {
                 None
             };
+            debug!("TaintRule: Starting sources processing for rule '{}' and file '{}', sources count: {}", rule.id, file.file_path, sources.len());
             let mut source_syms = Vec::new();
-            for tp in sources {
-                let inside_ranges = regex_ranges(source_text, &tp.inside);
-                let not_inside_ranges = regex_ranges(source_text, &tp.not_inside);
-                for re in &tp.allow {
-                    for m in re.find_iter(source_text) {
-                        if let Some(deny) = &tp.deny {
-                            if deny.is_match(&source_text[m.start()..m.end()]) {
-                                continue;
+            for (tp_idx, tp) in sources.iter().enumerate() {
+                debug!("TaintRule: Processing source {} for rule '{}' and file '{}'", tp_idx, rule.id, file.file_path);
+                debug!("TaintRule: Computing inside ranges for source {} for rule '{}' and file '{}'", tp_idx, rule.id, file.file_path);
+                let inside_ranges = regex_ranges_any(source_text, &tp.inside);
+                debug!("TaintRule: Computing not_inside ranges for source {} for rule '{}' and file '{}'", tp_idx, rule.id, file.file_path);
+                let not_inside_ranges = regex_ranges_any(source_text, &tp.not_inside);
+                debug!("TaintRule: Starting allow patterns for source {} for rule '{}' and file '{}'", tp_idx, rule.id, file.file_path);
+                for (re_idx, re) in tp.allow.iter().enumerate() {
+                    if re.is_fancy() {
+                        debug!(rule=%rule.id, file=%file.file_path, tp_idx, re_idx, kind="taint.sources.allow", fancy=true, "Scanning fancy regex");
+                        let start_guard = Instant::now();
+                        let mut offset = 0usize;
+                        for seg in source_text.split_inclusive('\n') {
+                            if start_guard.elapsed() > FANCY_REGEX_GUARD {
+                                debug!(rule=%rule.id, file=%file.file_path, tp_idx, re_idx, kind="taint.sources.allow", "Aborting fancy regex scan due to guard timeout");
+                                break;
                             }
-                        }
-                        if !inside_ranges.is_empty()
-                            && inside_ranges
-                                .iter()
-                                .all(|(s, e)| m.start() < *s || m.end() > *e)
-                        {
-                            continue;
-                        }
-                        let block_match = || {
-                            tp.not_inside.iter().any(|re| {
-                                if let Some((s, e)) = enclosing_block(source_text, m.start()) {
-                                    re.is_match(&source_text[s..e])
-                                } else {
-                                    false
+                            let mut match_count = 0;
+                            for (ls, le) in re.find_iter(seg) {
+                                // Prevent infinite loops in fancy regex by limiting matches per segment
+                                match_count += 1;
+                                if match_count > 1000 {
+                                    debug!(rule=%rule.id, file=%file.file_path, tp_idx, re_idx, kind="taint.sources.allow", "Aborting fancy regex scan due to too many matches in segment");
+                                    break;
                                 }
-                            })
-                        };
-                        let in_not_inside = if !not_inside_ranges.is_empty() {
-                            not_inside_ranges
-                                .iter()
-                                .any(|(s, e)| m.start() >= *s && m.end() <= *e)
-                                || block_match()
-                        } else {
-                            block_match()
-                        };
-                        if in_not_inside {
-                            continue;
-                        }
-                        if tp.focus.is_some() {
-                            if let Some(caps) = re.captures(&source_text[m.start()..m.end()]) {
-                                if let Some(sym) = caps.get(1) {
-                                    let mut line = 1usize;
-                                    let mut line_start = 0usize;
-                                    for (idx, ch) in source_text[..m.start()].char_indices() {
-                                        if ch == '\n' {
-                                            line += 1;
-                                            line_start = idx + 1;
+                                
+                                // Check timeout more frequently within the iterator
+                                if start_guard.elapsed() > FANCY_REGEX_GUARD {
+                                    debug!(rule=%rule.id, file=%file.file_path, tp_idx, re_idx, kind="taint.sources.allow", "Aborting fancy regex scan due to guard timeout in iterator");
+                                    break;
+                                }
+                                
+                                let ms = offset + ls;
+                                let me = offset + le;
+                                if let Some(deny) = &tp.deny {
+                                    if deny.is_match(&source_text[ms..me]) {
+                                        continue;
+                                    }
+                                }
+                                if !inside_ranges.is_empty()
+                                    && inside_ranges
+                                        .iter()
+                                        .all(|(s, e)| ms < *s || me > *e)
+                                {
+                                    continue;
+                                }
+                                let block_match = || {
+                                    tp.not_inside.iter().any(|re| {
+                                        if let Some((s, e)) = enclosing_block(source_text, ms) {
+                                            re.is_match(&source_text[s..e])
+                                        } else {
+                                            false
+                                        }
+                                    })
+                                };
+                                let in_not_inside = if !not_inside_ranges.is_empty() {
+                                    not_inside_ranges
+                                        .iter()
+                                        .any(|(s, e)| ms >= *s && me <= *e)
+                                        || block_match()
+                                } else {
+                                    block_match()
+                                };
+                                if in_not_inside {
+                                    continue;
+                                }
+                                if tp.focus.is_some() {
+                                    if let Some(caps) = re.captures(&source_text[ms..me]) {
+                                        if let Some(sym) = caps.get(1) {
+                                            let mut line = 1usize;
+                                            let mut line_start = 0usize;
+                                            for (idx, ch) in source_text[..ms].char_indices() {
+                                                if ch == '\n' {
+                                                    line += 1;
+                                                    line_start = idx + 1;
+                                                }
+                                            }
+                                            let column = ms - line_start + 1;
+                                            source_syms
+                                                .push((sym.as_str().to_string(), line, column));
                                         }
                                     }
-                                    let column = m.start() - line_start + 1;
-                                    source_syms.push((sym.as_str().to_string(), line, column));
+                                }
+                            }
+                            offset += seg.len();
+                        }
+                    } else {
+                        for (ms, me) in re.find_iter(source_text) {
+                            if let Some(deny) = &tp.deny {
+                                if deny.is_match(&source_text[ms..me]) {
+                                    continue;
+                                }
+                            }
+                            if !inside_ranges.is_empty()
+                                && inside_ranges
+                                    .iter()
+                                    .all(|(s, e)| ms < *s || me > *e)
+                            {
+                                continue;
+                            }
+                            let block_match = || {
+                                tp.not_inside.iter().any(|re| {
+                                    if let Some((s, e)) = enclosing_block(source_text, ms) {
+                                        re.is_match(&source_text[s..e])
+                                    } else {
+                                        false
+                                    }
+                                })
+                            };
+                            let in_not_inside = if !not_inside_ranges.is_empty() {
+                                not_inside_ranges
+                                    .iter()
+                                    .any(|(s, e)| ms >= *s && me <= *e)
+                                    || block_match()
+                            } else {
+                                block_match()
+                            };
+                            if in_not_inside {
+                                continue;
+                            }
+                            if tp.focus.is_some() {
+                                if let Some(caps) = re.captures(&source_text[ms..me]) {
+                                    if let Some(sym) = caps.get(1) {
+                                        let mut line = 1usize;
+                                        let mut line_start = 0usize;
+                                        for (idx, ch) in source_text[..ms].char_indices() {
+                                            if ch == '\n' {
+                                                line += 1;
+                                                line_start = idx + 1;
+                                            }
+                                        }
+                                        let column = ms - line_start + 1;
+                                        source_syms.push((sym.as_str().to_string(), line, column));
+                                    }
                                 }
                             }
                         }
@@ -1122,47 +1403,116 @@ fn eval_rule_impl(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
                 }
             }
 
+            debug!("TaintRule: Starting sanitizers processing for rule '{}' and file '{}'", rule.id, file.file_path);
             let mut sanitized_syms = std::collections::HashSet::new();
-            for tp in sanitizers {
-                let inside_ranges = regex_ranges(source_text, &tp.inside);
-                let not_inside_ranges = regex_ranges(source_text, &tp.not_inside);
-                for re in &tp.allow {
-                    for m in re.find_iter(source_text) {
-                        if let Some(deny) = &tp.deny {
-                            if deny.is_match(&source_text[m.start()..m.end()]) {
+            for (tp_idx, tp) in sanitizers.iter().enumerate() {
+                let inside_ranges = regex_ranges_any(source_text, &tp.inside);
+                let not_inside_ranges = regex_ranges_any(source_text, &tp.not_inside);
+                for (re_idx, re) in tp.allow.iter().enumerate() {
+                    if re.is_fancy() {
+                        debug!(rule=%rule.id, file=%file.file_path, tp_idx, re_idx, kind="taint.sanitizers.allow", fancy=true, "Scanning fancy regex");
+                        let start_guard = Instant::now();
+                        let mut offset = 0usize;
+                        for seg in source_text.split_inclusive('\n') {
+                            if start_guard.elapsed() > FANCY_REGEX_GUARD {
+                                debug!(rule=%rule.id, file=%file.file_path, tp_idx, re_idx, kind="taint.sanitizers.allow", "Aborting fancy regex scan due to guard timeout");
+                                break;
+                            }
+                            let mut match_count = 0;
+                            for (ls, le) in re.find_iter(seg) {
+                                // Prevent infinite loops in fancy regex by limiting matches per segment
+                                match_count += 1;
+                                if match_count > 1000 {
+                                    debug!(rule=%rule.id, file=%file.file_path, tp_idx, re_idx, kind="taint.sanitizers.allow", "Aborting fancy regex scan due to too many matches in segment");
+                                    break;
+                                }
+                                
+                                // Check timeout more frequently within the iterator
+                                if start_guard.elapsed() > FANCY_REGEX_GUARD {
+                                    debug!(rule=%rule.id, file=%file.file_path, tp_idx, re_idx, kind="taint.sanitizers.allow", "Aborting fancy regex scan due to guard timeout in iterator");
+                                    break;
+                                }
+                                
+                                let ms = offset + ls;
+                                let me = offset + le;
+                                if let Some(deny) = &tp.deny {
+                                    if deny.is_match(&source_text[ms..me]) {
+                                        continue;
+                                    }
+                                }
+                                if !inside_ranges.is_empty()
+                                    && inside_ranges
+                                        .iter()
+                                        .all(|(s, e)| ms < *s || me > *e)
+                                {
+                                    continue;
+                                }
+                                let block_match = || {
+                                    tp.not_inside.iter().any(|re| {
+                                        if let Some((s, e)) = enclosing_block(source_text, ms) {
+                                            re.is_match(&source_text[s..e])
+                                        } else {
+                                            false
+                                        }
+                                    })
+                                };
+                                let in_not_inside = if !not_inside_ranges.is_empty() {
+                                    not_inside_ranges
+                                        .iter()
+                                        .any(|(s, e)| ms >= *s && me <= *e)
+                                        || block_match()
+                                } else {
+                                    block_match()
+                                };
+                                if in_not_inside {
+                                    continue;
+                                }
+                                if let Some(caps) = re.captures(&source_text[ms..me]) {
+                                    if let Some(sym) = caps.get(1) {
+                                        sanitized_syms.insert(sym.as_str().to_string());
+                                    }
+                                }
+                            }
+                            offset += seg.len();
+                        }
+                    } else {
+                        for (ms, me) in re.find_iter(source_text) {
+                            if let Some(deny) = &tp.deny {
+                                if deny.is_match(&source_text[ms..me]) {
+                                    continue;
+                                }
+                            }
+                            if !inside_ranges.is_empty()
+                                && inside_ranges
+                                    .iter()
+                                    .all(|(s, e)| ms < *s || me > *e)
+                            {
                                 continue;
                             }
-                        }
-                        if !inside_ranges.is_empty()
-                            && inside_ranges
-                                .iter()
-                                .all(|(s, e)| m.start() < *s || m.end() > *e)
-                        {
-                            continue;
-                        }
-                        let block_match = || {
-                            tp.not_inside.iter().any(|re| {
-                                if let Some((s, e)) = enclosing_block(source_text, m.start()) {
-                                    re.is_match(&source_text[s..e])
-                                } else {
-                                    false
+                            let block_match = || {
+                                tp.not_inside.iter().any(|re| {
+                                    if let Some((s, e)) = enclosing_block(source_text, ms) {
+                                        re.is_match(&source_text[s..e])
+                                    } else {
+                                        false
+                                    }
+                                })
+                            };
+                            let in_not_inside = if !not_inside_ranges.is_empty() {
+                                not_inside_ranges
+                                    .iter()
+                                    .any(|(s, e)| ms >= *s && me <= *e)
+                                    || block_match()
+                            } else {
+                                block_match()
+                            };
+                            if in_not_inside {
+                                continue;
+                            }
+                            if let Some(caps) = re.captures(&source_text[ms..me]) {
+                                if let Some(sym) = caps.get(1) {
+                                    sanitized_syms.insert(sym.as_str().to_string());
                                 }
-                            })
-                        };
-                        let in_not_inside = if !not_inside_ranges.is_empty() {
-                            not_inside_ranges
-                                .iter()
-                                .any(|(s, e)| m.start() >= *s && m.end() <= *e)
-                                || block_match()
-                        } else {
-                            block_match()
-                        };
-                        if in_not_inside {
-                            continue;
-                        }
-                        if let Some(caps) = re.captures(&source_text[m.start()..m.end()]) {
-                            if let Some(sym) = caps.get(1) {
-                                sanitized_syms.insert(sym.as_str().to_string());
                             }
                         }
                     }
@@ -1174,106 +1524,256 @@ fn eval_rule_impl(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
                 .filter(|(s, _, _)| !sanitized_syms.contains(s))
                 .collect();
 
+            debug!("TaintRule: Starting reclass processing for rule '{}' and file '{}'", rule.id, file.file_path);
             let mut reclass_syms = std::collections::HashSet::new();
-            for tp in reclass {
-                let inside_ranges = regex_ranges(source_text, &tp.inside);
-                let not_inside_ranges = regex_ranges(source_text, &tp.not_inside);
-                for re in &tp.allow {
-                    for m in re.find_iter(source_text) {
-                        if let Some(deny) = &tp.deny {
-                            if deny.is_match(&source_text[m.start()..m.end()]) {
+            for (tp_idx, tp) in reclass.iter().enumerate() {
+                let inside_ranges = regex_ranges_any(source_text, &tp.inside);
+                let not_inside_ranges = regex_ranges_any(source_text, &tp.not_inside);
+                for (re_idx, re) in tp.allow.iter().enumerate() {
+                    if re.is_fancy() {
+                        debug!(rule=%rule.id, file=%file.file_path, tp_idx, re_idx, kind="taint.reclass.allow", fancy=true, "Scanning fancy regex");
+                        let start_guard = Instant::now();
+                        let mut offset = 0usize;
+                        for seg in source_text.split_inclusive('\n') {
+                            if start_guard.elapsed() > FANCY_REGEX_GUARD {
+                                debug!(rule=%rule.id, file=%file.file_path, tp_idx, re_idx, kind="taint.reclass.allow", "Aborting fancy regex scan due to guard timeout");
+                                break;
+                            }
+                            let mut match_count = 0;
+                            for (ls, le) in re.find_iter(seg) {
+                                // Prevent infinite loops in fancy regex by limiting matches per segment
+                                match_count += 1;
+                                if match_count > 1000 {
+                                    debug!(rule=%rule.id, file=%file.file_path, tp_idx, re_idx, kind="taint.reclass.allow", "Aborting fancy regex scan due to too many matches in segment");
+                                    break;
+                                }
+                                
+                                // Check timeout more frequently within the iterator
+                                if start_guard.elapsed() > FANCY_REGEX_GUARD {
+                                    debug!(rule=%rule.id, file=%file.file_path, tp_idx, re_idx, kind="taint.reclass.allow", "Aborting fancy regex scan due to guard timeout in iterator");
+                                    break;
+                                }
+                                
+                                let ms = offset + ls;
+                                let me = offset + le;
+                                if let Some(deny) = &tp.deny {
+                                    if deny.is_match(&source_text[ms..me]) {
+                                        continue;
+                                    }
+                                }
+                                if !inside_ranges.is_empty()
+                                    && inside_ranges
+                                        .iter()
+                                        .all(|(s, e)| ms < *s || me > *e)
+                                {
+                                    continue;
+                                }
+                                let block_match = || {
+                                    tp.not_inside.iter().any(|re| {
+                                        if let Some((s, e)) = enclosing_block(source_text, ms) {
+                                            re.is_match(&source_text[s..e])
+                                        } else {
+                                            false
+                                        }
+                                    })
+                                };
+                                let in_not_inside = if !not_inside_ranges.is_empty() {
+                                    not_inside_ranges
+                                        .iter()
+                                        .any(|(s, e)| ms >= *s && me <= *e)
+                                        || block_match()
+                                } else {
+                                    block_match()
+                                };
+                                if in_not_inside {
+                                    continue;
+                                }
+                                if let Some(caps) = re.captures(&source_text[ms..me]) {
+                                    if let Some(sym) = caps.get(1) {
+                                        reclass_syms.insert(sym.as_str().to_string());
+                                    }
+                                }
+                            }
+                            offset += seg.len();
+                        }
+                    } else {
+                        for (ms, me) in re.find_iter(source_text) {
+                            if let Some(deny) = &tp.deny {
+                                if deny.is_match(&source_text[ms..me]) {
+                                    continue;
+                                }
+                            }
+                            if !inside_ranges.is_empty()
+                                && inside_ranges
+                                    .iter()
+                                    .all(|(s, e)| ms < *s || me > *e)
+                            {
                                 continue;
                             }
-                        }
-                        if !inside_ranges.is_empty()
-                            && inside_ranges
-                                .iter()
-                                .all(|(s, e)| m.start() < *s || m.end() > *e)
-                        {
-                            continue;
-                        }
-                        let block_match = || {
-                            tp.not_inside.iter().any(|re| {
-                                if let Some((s, e)) = enclosing_block(source_text, m.start()) {
-                                    re.is_match(&source_text[s..e])
-                                } else {
-                                    false
+                            let block_match = || {
+                                tp.not_inside.iter().any(|re| {
+                                    if let Some((s, e)) = enclosing_block(source_text, ms) {
+                                        re.is_match(&source_text[s..e])
+                                    } else {
+                                        false
+                                    }
+                                })
+                            };
+                            let in_not_inside = if !not_inside_ranges.is_empty() {
+                                not_inside_ranges
+                                    .iter()
+                                    .any(|(s, e)| ms >= *s && me <= *e)
+                                    || block_match()
+                            } else {
+                                block_match()
+                            };
+                            if in_not_inside {
+                                continue;
+                            }
+                            if let Some(caps) = re.captures(&source_text[ms..me]) {
+                                if let Some(sym) = caps.get(1) {
+                                    reclass_syms.insert(sym.as_str().to_string());
                                 }
-                            })
-                        };
-                        let in_not_inside = if !not_inside_ranges.is_empty() {
-                            not_inside_ranges
-                                .iter()
-                                .any(|(s, e)| m.start() >= *s && m.end() <= *e)
-                                || block_match()
-                        } else {
-                            block_match()
-                        };
-                        if in_not_inside {
-                            continue;
-                        }
-                        if let Some(caps) = re.captures(&source_text[m.start()..m.end()]) {
-                            if let Some(sym) = caps.get(1) {
-                                reclass_syms.insert(sym.as_str().to_string());
                             }
                         }
                     }
                 }
             }
 
+            debug!("TaintRule: Starting sinks processing for rule '{}' and file '{}'", rule.id, file.file_path);
+            debug!("TaintRule: Sinks count: {} for rule '{}'", sinks.len(), rule.id);
             let mut sink_hits = Vec::new();
-            for tp in sinks {
-                let inside_ranges = regex_ranges(source_text, &tp.inside);
-                let not_inside_ranges = regex_ranges(source_text, &tp.not_inside);
-                for re in &tp.allow {
-                    for m in re.find_iter(source_text) {
-                        if let Some(deny) = &tp.deny {
-                            if deny.is_match(&source_text[m.start()..m.end()]) {
+            for (tp_idx, tp) in sinks.iter().enumerate() {
+                debug!("TaintRule: Processing sink {}/{} for rule '{}'", tp_idx + 1, sinks.len(), rule.id);
+                let inside_ranges = regex_ranges_any(source_text, &tp.inside);
+                let not_inside_ranges = regex_ranges_any(source_text, &tp.not_inside);
+                for (re_idx, re) in tp.allow.iter().enumerate() {
+                    if re.is_fancy() {
+                        debug!(rule=%rule.id, file=%file.file_path, tp_idx, re_idx, kind="taint.sinks.allow", fancy=true, "Scanning fancy regex");
+                        let start_guard = Instant::now();
+                        let mut offset = 0usize;
+                        for seg in source_text.split_inclusive('\n') {
+                            if start_guard.elapsed() > FANCY_REGEX_GUARD {
+                                debug!(rule=%rule.id, file=%file.file_path, tp_idx, re_idx, kind="taint.sinks.allow", "Aborting fancy regex scan due to guard timeout");
+                                break;
+                            }
+                            let mut match_count = 0;
+                            for (ls, le) in re.find_iter(seg) {
+                                // Prevent infinite loops in fancy regex by limiting matches per segment
+                                match_count += 1;
+                                if match_count > 1000 {
+                                    debug!(rule=%rule.id, file=%file.file_path, tp_idx, re_idx, kind="taint.sinks.allow", "Aborting fancy regex scan due to too many matches in segment");
+                                    break;
+                                }
+                                
+                                // Check timeout more frequently within the iterator
+                                if start_guard.elapsed() > FANCY_REGEX_GUARD {
+                                    debug!(rule=%rule.id, file=%file.file_path, tp_idx, re_idx, kind="taint.sinks.allow", "Aborting fancy regex scan due to guard timeout in iterator");
+                                    break;
+                                }
+                                
+                                let ms = offset + ls;
+                                let me = offset + le;
+                                if let Some(deny) = &tp.deny {
+                                    if deny.is_match(&source_text[ms..me]) {
+                                        continue;
+                                    }
+                                }
+                                if !inside_ranges.is_empty()
+                                    && inside_ranges
+                                        .iter()
+                                        .all(|(s, e)| ms < *s || me > *e)
+                                {
+                                    continue;
+                                }
+                                let block_match = || {
+                                    tp.not_inside.iter().any(|re| {
+                                        if let Some((s, e)) = enclosing_block(source_text, ms) {
+                                            re.is_match(&source_text[s..e])
+                                        } else {
+                                            false
+                                        }
+                                    })
+                                };
+                                let in_not_inside = if !not_inside_ranges.is_empty() {
+                                    not_inside_ranges
+                                        .iter()
+                                        .any(|(s, e)| ms >= *s && me <= *e)
+                                        || block_match()
+                                } else {
+                                    block_match()
+                                };
+                                if in_not_inside {
+                                    continue;
+                                }
+                                let mut line = 1usize;
+                                let mut line_start = 0usize;
+                                for (idx, ch) in source_text[..ms].char_indices() {
+                                    if ch == '\n' {
+                                        line += 1;
+                                        line_start = idx + 1;
+                                    }
+                                }
+                                let column = ms - line_start + 1;
+                                let line_end = source_text[me..]
+                                    .find('\n')
+                                    .map(|i| me + i)
+                                    .unwrap_or_else(|| source_text.len());
+                                let excerpt = source_text[line_start..line_end].to_string();
+                                sink_hits.push((source_text[ms..me].to_string(), line, column, excerpt));
+                            }
+                            offset += seg.len();
+                        }
+                    } else {
+                        for (ms, me) in re.find_iter(source_text) {
+                            if let Some(deny) = &tp.deny {
+                                if deny.is_match(&source_text[ms..me]) {
+                                    continue;
+                                }
+                            }
+                            if !inside_ranges.is_empty()
+                                && inside_ranges
+                                    .iter()
+                                    .all(|(s, e)| ms < *s || me > *e)
+                            {
                                 continue;
                             }
-                        }
-                        if !inside_ranges.is_empty()
-                            && inside_ranges
-                                .iter()
-                                .all(|(s, e)| m.start() < *s || m.end() > *e)
-                        {
-                            continue;
-                        }
-                        let block_match = || {
-                            tp.not_inside.iter().any(|re| {
-                                if let Some((s, e)) = enclosing_block(source_text, m.start()) {
-                                    re.is_match(&source_text[s..e])
-                                } else {
-                                    false
-                                }
-                            })
-                        };
-                        let in_not_inside = if !not_inside_ranges.is_empty() {
-                            not_inside_ranges
-                                .iter()
-                                .any(|(s, e)| m.start() >= *s && m.end() <= *e)
-                                || block_match()
-                        } else {
-                            block_match()
-                        };
-                        if in_not_inside {
-                            continue;
-                        }
-                        let mut line = 1usize;
-                        let mut line_start = 0usize;
-                        for (idx, ch) in source_text[..m.start()].char_indices() {
-                            if ch == '\n' {
-                                line += 1;
-                                line_start = idx + 1;
+                            let block_match = || {
+                                tp.not_inside.iter().any(|re| {
+                                    if let Some((s, e)) = enclosing_block(source_text, ms) {
+                                        re.is_match(&source_text[s..e])
+                                    } else {
+                                        false
+                                    }
+                                })
+                            };
+                            let in_not_inside = if !not_inside_ranges.is_empty() {
+                                not_inside_ranges
+                                    .iter()
+                                    .any(|(s, e)| ms >= *s && me <= *e)
+                                    || block_match()
+                            } else {
+                                block_match()
+                            };
+                            if in_not_inside {
+                                continue;
                             }
+                            let mut line = 1usize;
+                            let mut line_start = 0usize;
+                            for (idx, ch) in source_text[..ms].char_indices() {
+                                if ch == '\n' {
+                                    line += 1;
+                                    line_start = idx + 1;
+                                }
+                            }
+                            let column = ms - line_start + 1;
+                            let line_end = source_text[me..]
+                                .find('\n')
+                                .map(|i| me + i)
+                                .unwrap_or_else(|| source_text.len());
+                            let excerpt = source_text[line_start..line_end].to_string();
+                            sink_hits.push((source_text[ms..me].to_string(), line, column, excerpt));
                         }
-                        let column = m.start() - line_start + 1;
-                        let line_end = source_text[m.end()..]
-                            .find('\n')
-                            .map(|i| m.end() + i)
-                            .unwrap_or_else(|| source_text.len());
-                        let excerpt = source_text[line_start..line_end].to_string();
-                        sink_hits.push((m.as_str().to_string(), line, column, excerpt));
                     }
                 }
             }
@@ -1302,9 +1802,11 @@ fn eval_rule_impl(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
                         fix: rule.fix.clone(),
                     });
                 }
+                debug!("eval_rule_impl: Returning {} findings for rule '{}' and file '{}'", findings.len(), rule.id, file.file_path);
                 return findings;
             }
             if !has_flow {
+                debug!("eval_rule_impl: No flow found, returning empty findings for rule '{}' and file '{}'", rule.id, file.file_path);
                 return Vec::new();
             }
             let mut findings = Vec::new();
@@ -1344,6 +1846,7 @@ fn eval_rule_impl(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
         file: PathBuf::from(&file.file_path),
         matched: !findings.is_empty(),
     });
+    debug!("eval_rule_impl: Final return with {} findings for rule '{}' and file '{}'", findings.len(), rule.id, file.file_path);
     findings
 }
 
@@ -1638,13 +2141,26 @@ fn into_engine_metavar(v: &LoaderMetaVar) -> pattern::MetaVar {
 }
 
 fn match_ast_pattern(file: &FileIR, pattern: &pattern::AstPattern) -> Vec<AstMatch> {
+    debug!("match_ast_pattern: Starting AST pattern matching for file '{}'", file.file_path);
     let ast = match &file.ast {
         Some(a) => a,
-        None => return Vec::new(),
+        None => {
+            debug!("match_ast_pattern: No AST available for file '{}'", file.file_path);
+            return Vec::new();
+        }
     };
+    debug!("match_ast_pattern: Processing {} nodes for file '{}'", ast.index.len(), file.file_path);
     let mut matches = Vec::new();
+    let mut node_count = 0;
     for node in &ast.index {
+        node_count += 1;
+        if node_count % 1000 == 0 {
+            debug!("match_ast_pattern: Processed {} nodes for file '{}'", node_count, file.file_path);
+        }
         if node.kind == pattern.kind && within_ok(ast, node, pattern.within.as_deref()) {
+            if node_count % 1000 == 0 {
+                debug!("match_ast_pattern: Capturing metavars for node {} of type '{}'", node_count, node.kind);
+            }
             if let Some(mv) = capture_metavars(node, &pattern.metavariables) {
                 let _ = mv; // metavariables currently unused
                 matches.push(AstMatch {
@@ -1654,6 +2170,7 @@ fn match_ast_pattern(file: &FileIR, pattern: &pattern::AstPattern) -> Vec<AstMat
             }
         }
     }
+    debug!("match_ast_pattern: Completed AST pattern matching for file '{}', found {} matches", file.file_path, matches.len());
     matches
 }
 

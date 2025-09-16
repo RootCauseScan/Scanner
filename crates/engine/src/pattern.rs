@@ -1,4 +1,4 @@
-use regex::Regex;
+use crate::regex_ext::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
