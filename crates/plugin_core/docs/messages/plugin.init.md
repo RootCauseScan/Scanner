@@ -14,6 +14,7 @@ This message initializes the plugin with configuration, limits, and capabilities
     "session_id": "session_abc123",
     "workspace_root": "/home/user/projects/myapp",
     "rules_root": "/home/user/projects/myapp/.rootcause/rules",
+    "cwd": "/home/user/projects/myapp",
     "capabilities_requested": ["discover", "transform", "analyze", "report", "rules"],
     "options": {
       "scan_modes": ["aggressive"],
@@ -46,4 +47,3 @@ This message initializes the plugin with configuration, limits, and capabilities
   }
 }
 ```
-

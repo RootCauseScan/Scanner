@@ -28,14 +28,14 @@ Get available rules from the plugin.
         "id": "py.sql-injection",
         "name": "SQL Injection Detection",
         "severity": "high",
-        "language": ["python"],
+        "languages": ["python"],
         "category": "security"
       },
       {
         "id": "py.xss-prevention",
         "name": "XSS Prevention Check",
         "severity": "medium", 
-        "language": ["python"],
+        "languages": ["python"],
         "category": "security"
       }
     ],
@@ -43,6 +43,5 @@ Get available rules from the plugin.
   }
 }
 ```
-
 
 

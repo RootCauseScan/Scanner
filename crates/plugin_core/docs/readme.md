@@ -150,6 +150,7 @@ struct PluginInit {
     session_id: String,
     workspace_root: String,
     rules_root: String,
+    cwd: String,
     capabilities_requested: Vec<String>,
     options: Value,
     limits: Option<Limits>,
