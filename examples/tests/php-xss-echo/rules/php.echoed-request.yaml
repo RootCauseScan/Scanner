@@ -1,0 +1,11 @@
+rules:
+- id: php.echoed-request
+  message: Echoing unsanitized request parameter
+  severity: ERROR
+  patterns:
+    - pattern: echo $X;
+    - metavariable-regex:
+        metavariable: $X
+        regex: '\$_(GET|POST|REQUEST)\[[^\]]+\]'
+    - pattern-not: echo htmlspecialchars(...);
+  languages: [php]

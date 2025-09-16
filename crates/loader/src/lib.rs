@@ -1091,7 +1091,7 @@ fn compile_semgrep_rule(
 
     if use_multi {
         let mut allow: Vec<(AnyRegex, String)> = Vec::new();
-        let mut deny = None;
+        let mut deny_parts: Vec<String> = Vec::new();
         let mut inside = Vec::new();
         let mut not_inside = Vec::new();
         for (kind, pat) in patterns {
@@ -1137,7 +1137,7 @@ fn compile_semgrep_rule(
                         .filter(|l| !l.is_empty() && *l != "...")
                         .collect::<Vec<_>>()
                         .join("\n");
-                    deny = Some(Regex::new(&semgrep_to_regex_exact(&combined, &mv))?);
+                    deny_parts.push(semgrep_to_regex_exact(&combined, &mv));
                 }
                 PatternKind::Regex => {
                     allow.push((FancyRegex::new(&pat)?.into(), pat));
@@ -1145,6 +1145,14 @@ fn compile_semgrep_rule(
             }
         }
         if !allow.is_empty() {
+            let deny = if !deny_parts.is_empty() {
+                let cleaned: Vec<String> = deny_parts
+                    .into_iter()
+                    .map(|s| s.strip_prefix("(?s)").map(|x| x.to_string()).unwrap_or(s))
+                    .collect();
+                let joined = cleaned.join(")|(?:");
+                let big = format!("(?s)(?:{})", joined);
+                Some(Regex::new(&big)?)} else { None };
             rs.rules.push(CompiledRule {
                 id: sr.id,
                 severity,

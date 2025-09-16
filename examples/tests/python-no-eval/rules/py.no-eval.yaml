@@ -1,0 +1,10 @@
+rules:
+- id: py.no-eval
+  message: Avoid eval on dynamic input
+  severity: ERROR
+  patterns:
+    - pattern: eval(...)
+    - pattern-not: eval('...')
+    - pattern-not: eval("...")
+  languages: [python]
+

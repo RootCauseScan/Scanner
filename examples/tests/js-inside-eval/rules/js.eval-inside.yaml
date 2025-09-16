@@ -1,0 +1,12 @@
+rules:
+- id: js.eval-inside
+  message: Avoid eval inside function dangerous
+  severity: ERROR
+  patterns:
+    - pattern: eval(...)
+    - pattern-inside: |
+        function dangerous() {
+        ...
+        }
+  languages: [javascript]
+
