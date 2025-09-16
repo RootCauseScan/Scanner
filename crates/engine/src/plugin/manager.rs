@@ -149,9 +149,9 @@ pub struct ManagedPlugin {
     plugin: ProcPlugin,
     needs_content: bool,
     reads_fs: bool,
-    /// Nombre del plugin, útil para registros.
+    /// Plugin name, useful for logging.
     name: String,
-    /// Versión reportada por el plugin.
+    /// Version reported by the plugin.
     plugin_version: String,
 }
 

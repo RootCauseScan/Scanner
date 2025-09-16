@@ -212,7 +212,7 @@ fn reports_cache_hits_and_misses() {
     canonicalize_path(&path);
     canonicalize_path(&path);
     let (h1, m1) = canonical_cache_stats();
-    // En Windows, el cache puede tener estado residual de otros tests
+    // On Windows, the cache may have residual state from other tests
     if cfg!(windows) {
         assert!(h1 - h0 >= 1);
         assert!(m1 - m0 >= 1);
@@ -289,7 +289,7 @@ fn cache_single_miss_no_hits_for_multiple_findings() -> anyhow::Result<()> {
         remediation: None,
         fix: None,
         interfile: false,
-        matcher: MatcherKind::TextRegex(regex::Regex::new("foo").unwrap(), String::new()),
+        matcher: MatcherKind::TextRegex(regex::Regex::new("foo").unwrap().into(), String::new()),
         source_file: None,
         sources: vec![],
         sinks: vec![],
@@ -326,7 +326,7 @@ fn metrics_capture_cache_usage() -> anyhow::Result<()> {
         remediation: None,
         fix: None,
         interfile: false,
-        matcher: MatcherKind::TextRegex(regex::Regex::new("foo").unwrap(), String::new()),
+        matcher: MatcherKind::TextRegex(regex::Regex::new("foo").unwrap().into(), String::new()),
         source_file: None,
         sources: vec![],
         sinks: vec![],

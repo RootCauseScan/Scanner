@@ -3,7 +3,7 @@ use super::*;
 use loader::Severity;
 use serde_json::json;
 
-// Verifica que el modo streaming produce los mismos hallazgos que el modo por lotes.
+// Verify that streaming mode produces the same findings as batch mode.
 #[test]
 fn stream_matches_batch() {
     let file = mk_file_ir(vec![(
@@ -34,7 +34,7 @@ fn stream_matches_batch() {
     assert_eq!(batch[0].rule_id, stream[0].rule_id);
 }
 
-// El modo streaming maneja correctamente entradas que no coinciden con reglas.
+// Streaming mode correctly handles inputs that do not match rules.
 #[test]
 fn stream_no_findings_on_non_matching_input() {
     let file = mk_file_ir(vec![(
@@ -64,7 +64,7 @@ fn stream_no_findings_on_non_matching_input() {
     assert!(findings.is_empty());
 }
 
-// Procesar cientos de archivos no aumenta significativamente la memoria.
+// Processing hundreds of files does not significantly increase memory usage.
 #[test]
 fn stream_memory_stable() {
     use std::fs::File;

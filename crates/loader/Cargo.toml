@@ -17,6 +17,7 @@ serde_json = { workspace = true }
 serde_yaml = { workspace = true }
 regex = { workspace = true }
 tracing = { workspace = true }
+fancy-regex = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"

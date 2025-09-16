@@ -40,7 +40,7 @@ pub fn build_dfg(fir: &mut FileIR) -> Result<()> {
     }
 }
 
-/// Determina el tipo de archivo soportado a partir del nombre/extensión.
+/// Determines the supported file type from the name/extension.
 ///
 /// # Example
 /// ```
@@ -91,7 +91,7 @@ pub fn parse_str(content: &str) -> anyhow::Result<FileIR> {
     Ok(fir)
 }
 
-/// Lee un archivo y produce su representación intermedia [`FileIR`].
+/// Reads a file and produces its intermediate representation [`FileIR`].
 ///
 /// # Example
 /// ```

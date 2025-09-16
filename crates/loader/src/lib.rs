@@ -2,6 +2,7 @@
 //! and compiles them to an internal executable representation.
 
 use anyhow::{anyhow, Context};
+use fancy_regex::Regex as FancyRegex;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
@@ -183,6 +184,47 @@ pub struct MetavariableRegex {
 }
 
 #[derive(Debug, Clone)]
+pub enum AnyRegex {
+    Std(Regex),
+    Fancy(FancyRegex),
+}
+
+impl AnyRegex {
+    pub fn is_match(&self, text: &str) -> bool {
+        match self {
+            Self::Std(r) => r.is_match(text),
+            Self::Fancy(r) => r.is_match(text).unwrap_or(false),
+        }
+    }
+
+    pub fn find_iter<'a>(
+        &'a self,
+        text: &'a str,
+    ) -> Box<dyn Iterator<Item = (usize, usize)> + 'a> {
+        match self {
+            Self::Std(r) => Box::new(r.find_iter(text).map(|m| (m.start(), m.end()))),
+            Self::Fancy(r) => Box::new(
+                r.find_iter(text)
+                    .filter_map(|m| m.ok())
+                    .map(|m| (m.start(), m.end())),
+            ),
+        }
+    }
+}
+
+impl From<Regex> for AnyRegex {
+    fn from(r: Regex) -> Self {
+        AnyRegex::Std(r)
+    }
+}
+
+impl From<FancyRegex> for AnyRegex {
+    fn from(r: FancyRegex) -> Self {
+        AnyRegex::Fancy(r)
+    }
+}
+
+#[derive(Debug, Clone)]
 /// Expression for AST queries, combining type and value.
 pub struct Query {
     pub kind: Regex,
@@ -192,10 +234,10 @@ pub struct Query {
 #[derive(Debug, Clone)]
 pub enum MatcherKind {
     /// Regex search in plain text.
-    TextRegex(Regex, String /*scope/path*/),
+    TextRegex(AnyRegex, String /*scope/path*/),
     /// Multiple allow/deny expressions evaluated in the same file.
     TextRegexMulti {
-        allow: Vec<(Regex, String)>,
+        allow: Vec<(AnyRegex, String)>,
         deny: Option<Regex>,
         inside: Vec<Regex>,
         not_inside: Vec<Regex>,
@@ -256,7 +298,7 @@ pub fn load_rules(dir: &Path) -> anyhow::Result<RuleSet> {
     let mut rs = RuleSet::default();
     let mut seen_ids: HashSet<String> = HashSet::new();
     let excl = |p: &Path| {
-        // Excluir la carpeta .git
+        // Exclude the .git folder
         p.file_name()
             .and_then(|name| name.to_str())
             .map(|name| name == ".git")
@@ -506,7 +548,7 @@ fn compile_yaml_rule(
                 fix: fix.clone(),
                 interfile: yr.options.interfile,
                 matcher: MatcherKind::TextRegex(
-                    re,
+                    re.into(),
                     String::new(), /*scope for dockerfile instr name*/
                 ),
                 source_file: source_file.clone(),
@@ -647,11 +689,24 @@ fn compile_json_rule(
 }
 
 pub fn semgrep_to_regex(pattern: &str, mv: &HashMap<String, String>) -> String {
+    fn esc(seg: &str) -> String {
+        let mut out = String::new();
+        for ch in seg.chars() {
+            match ch {
+                '{' | '}' => {
+                    out.push('\\');
+                    out.push(ch);
+                }
+                _ => out.push_str(&regex::escape(&ch.to_string())),
+            }
+        }
+        out
+    }
     let metav = Regex::new(r"\$[A-Za-z_][A-Za-z0-9_]*").expect("valid metavariable regex");
     let mut p = String::new();
     let mut last = 0;
     for m in metav.find_iter(pattern) {
-        p.push_str(&regex::escape(&pattern[last..m.start()]));
+        p.push_str(&esc(&pattern[last..m.start()]));
         let var = &pattern[m.start() + 1..m.end()];
         if let Some(r) = mv.get(var) {
             let r = r.trim_start_matches('^').trim_end_matches('$');
@@ -661,18 +716,31 @@ pub fn semgrep_to_regex(pattern: &str, mv: &HashMap<String, String>) -> String {
         }
         last = m.end();
     }
-    p.push_str(&regex::escape(&pattern[last..]));
+    p.push_str(&esc(&pattern[last..]));
     p = p.replace("\\.\\.\\.", ".*?");
     p = p.replace(" ", "\\s+");
     format!("(?s).*{p}.*")
 }
 
 pub fn semgrep_to_regex_exact(pattern: &str, mv: &HashMap<String, String>) -> String {
+    fn esc(seg: &str) -> String {
+        let mut out = String::new();
+        for ch in seg.chars() {
+            match ch {
+                '{' | '}' => {
+                    out.push('\\');
+                    out.push(ch);
+                }
+                _ => out.push_str(&regex::escape(&ch.to_string())),
+            }
+        }
+        out
+    }
     let metav = Regex::new(r"\$[A-Za-z_][A-Za-z0-9_]*").expect("valid metavariable regex");
     let mut p = String::new();
     let mut last = 0;
     for m in metav.find_iter(pattern) {
-        p.push_str(&regex::escape(&pattern[last..m.start()]));
+        p.push_str(&esc(&pattern[last..m.start()]));
         let var = &pattern[m.start() + 1..m.end()];
         if let Some(r) = mv.get(var) {
             let r = r.trim_start_matches('^').trim_end_matches('$');
@@ -682,7 +750,7 @@ pub fn semgrep_to_regex_exact(pattern: &str, mv: &HashMap<String, String>) -> St
         }
         last = m.end();
     }
-    p.push_str(&regex::escape(&pattern[last..]));
+    p.push_str(&esc(&pattern[last..]));
     p = p.replace("\\.\\.\\.", ".*?");
     p = p.replace(" ", "\\s+");
     format!("(?s){p}")
@@ -693,16 +761,25 @@ fn collect_metavar_regex(
     mv: &mut HashMap<String, String>,
     focus: &mut Option<String>,
 ) {
-    if let Some(seq) = value
-        .get("metavariable-regex")
-        .and_then(|v| v.as_sequence())
-    {
-        for item in seq {
-            if let (Some(var), Some(re)) = (
-                item.get("metavariable").and_then(|v| v.as_str()),
-                item.get("regex").and_then(|v| v.as_str()),
-            ) {
-                mv.insert(var.trim_start_matches('$').to_string(), re.to_string());
+    // Handle both sequence and single-map forms of metavariable-regex
+    if let Some(node) = value.get("metavariable-regex") {
+        if let Some(seq) = node.as_sequence() {
+            for item in seq {
+                if let (Some(var), Some(re)) = (
+                    item.get("metavariable").and_then(|v| v.as_str()),
+                    item.get("regex").and_then(|v| v.as_str()),
+                ) {
+                    mv.insert(var.trim_start_matches('$').to_string(), re.to_string());
+                }
+            }
+        } else if let Some(map) = node.as_mapping() {
+            let var = map
+                .get("metavariable")
+                .and_then(|v| v.as_str())
+                .map(|s| s.trim_start_matches('$').to_string());
+            let re = map.get("regex").and_then(|v| v.as_str()).map(|s| s.to_string());
+            if let (Some(var), Some(re)) = (var, re) {
+                mv.insert(var, re);
             }
         }
     }
@@ -712,6 +789,15 @@ fn collect_metavar_regex(
         }
     }
     if let Some(obj) = value.as_mapping() {
+        // Also support being called on the metavariable-regex mapping itself
+        if let (Some(var), Some(re)) = (
+            obj.get(&YamlValue::from("metavariable"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.trim_start_matches('$').to_string()),
+            obj.get(&YamlValue::from("regex")).and_then(|v| v.as_str()).map(|s| s.to_string()),
+        ) {
+            mv.insert(var, re);
+        }
         for val in obj.values() {
             collect_metavar_regex(val, mv, focus);
         }
@@ -1004,7 +1090,7 @@ fn compile_semgrep_rule(
         || sr.pattern_either.is_some();
 
     if use_multi {
-        let mut allow: Vec<(Regex, String)> = Vec::new();
+        let mut allow: Vec<(AnyRegex, String)> = Vec::new();
         let mut deny = None;
         let mut inside = Vec::new();
         let mut not_inside = Vec::new();
@@ -1017,7 +1103,7 @@ fn compile_semgrep_rule(
                         .filter(|l| !l.is_empty() && *l != "...")
                     {
                         allow.push((
-                            Regex::new(&semgrep_to_regex_exact(line, &mv))?,
+                            Regex::new(&semgrep_to_regex_exact(line, &mv))?.into(),
                             line.to_string(),
                         ));
                     }
@@ -1054,7 +1140,7 @@ fn compile_semgrep_rule(
                     deny = Some(Regex::new(&semgrep_to_regex_exact(&combined, &mv))?);
                 }
                 PatternKind::Regex => {
-                    allow.push((Regex::new(&pat)?, pat));
+                    allow.push((FancyRegex::new(&pat)?.into(), pat));
                 }
             }
         }
@@ -1088,13 +1174,13 @@ fn compile_semgrep_rule(
             remediation: None,
             fix: sr.fix,
             interfile: sr.options.interfile,
-            matcher: MatcherKind::TextRegex(re, p),
+            matcher: MatcherKind::TextRegex(re.into(), p),
             source_file,
             sources: Vec::new(),
             sinks: Vec::new(),
         });
     } else if let Some(pr) = sr.pattern_regex {
-        let re = Regex::new(&pr)?;
+        let re = FancyRegex::new(&pr)?;
         rs.rules.push(CompiledRule {
             id: sr.id,
             severity,
@@ -1103,7 +1189,7 @@ fn compile_semgrep_rule(
             remediation: None,
             fix: sr.fix,
             interfile: sr.options.interfile,
-            matcher: MatcherKind::TextRegex(re, pr),
+            matcher: MatcherKind::TextRegex(re.into(), pr),
             source_file,
             sources: Vec::new(),
             sinks: Vec::new(),
@@ -1325,6 +1411,20 @@ mod tests {
         let re = Regex::new(&semgrep_to_regex("print($X)", &mv)).unwrap();
         assert!(re.is_match("print(123)"));
         assert!(!re.is_match("println(123)"));
+    }
+
+    #[test]
+    fn semgrep_to_regex_preserves_braces() {
+        let mv = HashMap::new();
+        let re = Regex::new(&semgrep_to_regex("{% debug %}", &mv)).unwrap();
+        assert!(re.is_match("{% debug %}"));
+    }
+
+    #[test]
+    fn semgrep_to_regex_exact_preserves_braces() {
+        let mv = HashMap::new();
+        let re = Regex::new(&semgrep_to_regex_exact("{% debug %}", &mv)).unwrap();
+        assert!(re.is_match("{% debug %}"));
     }
 
     #[test]

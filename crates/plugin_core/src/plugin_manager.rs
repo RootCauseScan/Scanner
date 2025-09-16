@@ -21,7 +21,7 @@ use tracing::{error, info};
 use crate::{Context, Plugin, PluginInfo, PluginManifest};
 use serde_json::Value;
 
-/// Coordina la vida útil de los plugins cargados.
+/// Coordinates the lifecycle of loaded plugins.
 pub struct PluginManager {
     plugins: Vec<(PluginManifest, Box<dyn Plugin + Send + Sync>)>,
 }
@@ -68,7 +68,7 @@ fn exec_count() -> usize {
 }
 
 impl PluginManager {
-    /// Crea un administrador vacío.
+    /// Creates an empty manager.
     pub fn new() -> Self {
         Self {
             plugins: Vec::new(),

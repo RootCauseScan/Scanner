@@ -32,7 +32,7 @@ fn deduplicates_duplicate_findings() {
     assert_eq!(findings.len(), 1);
 }
 
-// Verifica que hallazgos con IDs distintos no se mezclen.
+// Verify that findings with different IDs are not mixed.
 #[test]
 fn retains_unique_findings() {
     use ir::{IRNode, Meta};

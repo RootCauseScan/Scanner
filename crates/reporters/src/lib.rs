@@ -22,7 +22,7 @@ fn color_severity(sev: Severity) -> String {
     format!("{code}{text}\x1b[0m")
 }
 
-/// Crea un recuadro simple
+/// Creates a simple box
 fn simple_box(title: &str) -> String {
     let width = title.len() + 2;
     format!(
@@ -33,11 +33,11 @@ fn simple_box(title: &str) -> String {
     )
 }
 
-/// Crea estadísticas estilo Semgrep con recuadros elegantes
+/// Creates Semgrep-style statistics with elegant boxes
 fn create_semgrep_style_stats(info: &ScanInfo) -> String {
     let mut output = String::new();
 
-    // Header principal con tabs para consistencia
+    // Main header with tabs for consistency
     output.push_str("╭─────────────────╮\n");
     output.push_str("│ Analysis Status │\n");
     output.push_str("╰─────────────────╯\n");
@@ -65,7 +65,7 @@ fn create_semgrep_style_stats(info: &ScanInfo) -> String {
     ));
     output.push('\n');
 
-    // Tabla de rendimiento con estilo más limpio
+    // Performance table with cleaner style
     output.push_str("    PERFORMANCE\n");
     output.push_str(
         "    ──────────────────────────────────────────────────────────────────────────────\n",

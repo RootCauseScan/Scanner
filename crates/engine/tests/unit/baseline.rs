@@ -36,7 +36,7 @@ fn write_and_load_preserve_metadata() -> anyhow::Result<()> {
     let data = std::fs::read_to_string(&baseline_path)?;
     let entries: Vec<BaselineEntry> = serde_json::from_str(&data)?;
 
-    // Verificamos que el baseline contiene el finding esperado
+    // Verify that the baseline contains the expected finding
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].id, "id1");
     assert_eq!(entries[0].line, 1);

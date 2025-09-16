@@ -40,3 +40,4 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 shlex = "1"
 base64 = "0.21"
+fancy-regex = "0.11"

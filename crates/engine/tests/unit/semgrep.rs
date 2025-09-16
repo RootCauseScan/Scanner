@@ -19,7 +19,7 @@ fn pattern_inside_and_not_inside() {
         fix: None,
         interfile: false,
         matcher: MatcherKind::TextRegexMulti {
-            allow: vec![(Regex::new(r"foo\(\)").unwrap(), "foo()".into())],
+            allow: vec![(Regex::new(r"foo\(\)").unwrap().into(), "foo()".into())],
             deny: None,
             inside: vec![Regex::new(r"bar\([^\)]*\)").unwrap()],
             not_inside: vec![Regex::new(r"baz\([^\)]*\)").unwrap()],
@@ -50,7 +50,7 @@ fn pattern_not_inside_blocks_match() {
         fix: None,
         interfile: false,
         matcher: MatcherKind::TextRegexMulti {
-            allow: vec![(Regex::new(r"foo\(\)").unwrap(), "foo()".into())],
+            allow: vec![(Regex::new(r"foo\(\)").unwrap().into(), "foo()".into())],
             deny: None,
             inside: Vec::new(),
             not_inside: vec![Regex::new(r"baz\([^\)]*\)").unwrap()],
@@ -81,7 +81,7 @@ fn pattern_not_inside_method_signature() {
         fix: None,
         interfile: false,
         matcher: MatcherKind::TextRegexMulti {
-            allow: vec![(Regex::new(r"foo\(\)").unwrap(), "foo()".into())],
+            allow: vec![(Regex::new(r"foo\(\)").unwrap().into(), "foo()".into())],
             deny: None,
             inside: Vec::new(),
             not_inside: vec![Regex::new(r"fn safe\(\)").unwrap()],
@@ -112,7 +112,7 @@ fn pattern_not_inside_wrong_signature_matches_all() {
         fix: None,
         interfile: false,
         matcher: MatcherKind::TextRegexMulti {
-            allow: vec![(Regex::new(r"foo\(\)").unwrap(), "foo()".into())],
+            allow: vec![(Regex::new(r"foo\(\)").unwrap().into(), "foo()".into())],
             deny: None,
             inside: Vec::new(),
             not_inside: vec![Regex::new(r"fn missing\(\)").unwrap()],
@@ -145,10 +145,12 @@ fn pattern_not_inside_method_signature_with_signwith() {
         fix: None,
         interfile: false,
         matcher: MatcherKind::TextRegexMulti {
-            allow: vec![(
-                Regex::new(r"Jwts\\.builder\\(\\)").unwrap(),
-                "Jwts.builder()".into(),
-            )],
+            allow: vec![
+                (
+                    Regex::new(r"Jwts\\.builder\\(\\)").unwrap().into(),
+                    "Jwts.builder()".into(),
+                ),
+            ],
             deny: None,
             inside: Vec::new(),
             not_inside: vec![Regex::new(r"void good\(\)[^{]*\{[\s\S]*signWith\(").unwrap()],
@@ -161,4 +163,52 @@ fn pattern_not_inside_method_signature_with_signwith() {
     file.source = Some(fs::read_to_string(&path).unwrap());
     let findings = analyze_file(&file, &rules);
     assert!(findings.is_empty());
+}
+
+#[test]
+fn pattern_regex_handles_braces() {
+    let dir = tempdir().unwrap();
+    fs::write(
+        dir.path().join("debug.yaml"),
+        r#"rules:
+- id: debug-template-tag
+  languages: [regex]
+  severity: WARNING
+  message: debug tag
+  pattern-regex: ({% debug %})
+"#,
+    )
+    .unwrap();
+    let rs = loader::load_rules(dir.path()).unwrap();
+    let mut file = FileIR::new(
+        dir.path().join("t.html").to_string_lossy().into_owned(),
+        "html".into(),
+    );
+    file.source = Some("{% debug %}".into());
+    let findings = analyze_file(&file, &rs);
+    assert_eq!(findings.len(), 1);
+}
+
+#[test]
+fn pattern_regex_supports_lookaround() {
+    let dir = tempdir().unwrap();
+    fs::write(
+        dir.path().join("look.yaml"),
+        r#"rules:
+- id: lookaround
+  languages: [regex]
+  severity: WARNING
+  message: look
+  pattern-regex: foo(?=bar)
+"#,
+    )
+    .unwrap();
+    let rs = loader::load_rules(dir.path()).unwrap();
+    let mut file = FileIR::new(
+        dir.path().join("t.txt").to_string_lossy().into_owned(),
+        "txt".into(),
+    );
+    file.source = Some("foobar".into());
+    let findings = analyze_file(&file, &rs);
+    assert_eq!(findings.len(), 1);
 }

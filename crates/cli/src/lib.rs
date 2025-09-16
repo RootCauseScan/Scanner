@@ -74,7 +74,7 @@ pub fn parse_exclude(s: &str) -> Result<Regex, String> {
     glob_to_regex(&glob_str).map_err(|e| e.to_string())
 }
 
-/// Patrones de exclusión predeterminados.
+/// Default exclusion patterns.
 pub fn default_excludes() -> Vec<Regex> {
     vec![
         parse_exclude("**/node_modules/**").expect("valid default"),

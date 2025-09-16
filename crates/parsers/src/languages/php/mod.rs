@@ -26,17 +26,17 @@ const SUPERGLOBALS: &[&str] = &[
     "_GET", "_POST", "_REQUEST", "_COOKIE", "_SERVER", "_ENV", "_FILES", "_SESSION", "GLOBALS",
 ];
 
-// Pool de parsers para evitar problemas de concurrencia con tree-sitter
+// Parser pool to avoid concurrency issues with tree-sitter
 static PARSER_POOL: Mutex<Vec<tree_sitter::Parser>> = Mutex::new(Vec::new());
 
 fn get_parser() -> tree_sitter::Parser {
     let mut pool = PARSER_POOL.lock().expect("parser pool lock poisoned");
     if let Some(mut parser) = pool.pop() {
-        // Reset parser para reutilizarlo
+        // Reset parser for reuse
         parser.reset();
         parser
     } else {
-        // Crear nuevo parser si no hay disponibles
+        // Create new parser if none are available
         tree_sitter::Parser::new()
     }
 }

@@ -847,22 +847,22 @@ fn eval_rule_impl(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
             let not_inside_ranges = regex_ranges(source, not_inside);
             let aliases = use_aliases(file);
             for (re, orig) in allow {
-                for m in re.find_iter(source) {
+                for (start, end) in re.find_iter(source) {
                     if let Some(deny_re) = deny {
-                        if deny_re.is_match(&source[m.start()..m.end()]) {
+                        if deny_re.is_match(&source[start..end]) {
                             continue;
                         }
                     }
                     if !inside_ranges.is_empty()
                         && inside_ranges
                             .iter()
-                            .all(|(s, e)| m.start() < *s || m.end() > *e)
+                            .all(|(s, e)| start < *s || end > *e)
                     {
                         continue;
                     }
                     let block_match = || {
                         not_inside.iter().any(|re| {
-                            if let Some((s, e)) = enclosing_block(source, m.start()) {
+                            if let Some((s, e)) = enclosing_block(source, start) {
                                 re.is_match(&source[s..e])
                             } else {
                                 false
@@ -872,7 +872,7 @@ fn eval_rule_impl(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
                     let in_not_inside = if !not_inside_ranges.is_empty() {
                         not_inside_ranges
                             .iter()
-                            .any(|(s, e)| m.start() >= *s && m.end() <= *e)
+                            .any(|(s, e)| start >= *s && end <= *e)
                             || block_match()
                     } else {
                         block_match()
@@ -882,16 +882,16 @@ fn eval_rule_impl(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
                     }
                     let mut line = 1;
                     let mut line_start = 0;
-                    for (idx, ch) in source[..m.start()].char_indices() {
+                    for (idx, ch) in source[..start].char_indices() {
                         if ch == '\n' {
                             line += 1;
                             line_start = idx + 1;
                         }
                     }
-                    let column = m.start() - line_start + 1;
-                    let line_end = source[m.end()..]
+                    let column = start - line_start + 1;
+                    let line_end = source[end..]
                         .find('\n')
-                        .map(|i| m.end() + i)
+                        .map(|i| end + i)
                         .unwrap_or_else(|| source.len());
                     let excerpt = source[line_start..line_end].to_string();
                     let id = blake3::hash(
