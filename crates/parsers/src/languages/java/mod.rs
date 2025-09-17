@@ -1,4 +1,4 @@
-use crate::{catalog, ParserMetrics};
+use crate::{catalog as catalog_module, ParserMetrics};
 use anyhow::{anyhow, Context, Result};
 use ir::{
     AstNode, DFNode, DFNodeKind, DataFlowGraph, FileAst, FileIR, IRNode, Meta, Symbol, SymbolKind,
@@ -12,6 +12,8 @@ use std::{
 
 #[cfg(test)]
 mod tests;
+
+pub mod catalog;
 
 fn extract_package(content: &str) -> Option<String> {
     for line in content.lines() {
@@ -1066,7 +1068,7 @@ pub fn parse_java(content: &str, fir: &mut FileIR) -> Result<()> {
                                                 .into_iter()
                                                 .chain(std::iter::once(call.clone()))
                                                 .any(|f| {
-                                                    catalog::is_sanitizer("java", &f)
+                                                    catalog_module::is_sanitizer("java", &f)
                                                         || matches!(
                                                             fir.symbol_types.get(&f),
                                                             Some(SymbolKind::Sanitizer)
@@ -1157,7 +1159,7 @@ pub fn parse_java(content: &str, fir: &mut FileIR) -> Result<()> {
                                         .into_iter()
                                         .chain(std::iter::once(call.clone()))
                                         .any(|f| {
-                                            catalog::is_sanitizer("java", &f)
+                                            catalog_module::is_sanitizer("java", &f)
                                                 || matches!(
                                                     fir.symbol_types.get(&f),
                                                     Some(SymbolKind::Sanitizer)

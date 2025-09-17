@@ -11,6 +11,7 @@ use crate::ParserMetrics;
 mod tests;
 
 mod ast_builder;
+pub mod catalog;
 mod dfg_builder;
 mod imports;
 mod ir_builder;

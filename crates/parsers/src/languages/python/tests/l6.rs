@@ -1,6 +1,15 @@
-//! Level 6 handles field and container accesses with composite names.
-//! It tracks definitions like `cfg.endpoint` or `map["k"]`.
+//! Maturity Level L6 Tests for Python Parser
+//!
+//! This module contains tests that verify the parser can:
+//! - Handle field and container accesses with composite names
+//! - Track definitions like `cfg.endpoint` or `map["k"]`
+//! - Understand language-specific features (relative imports, wildcard, dynamics)
+//! - Handle dynamic method calls (getattr/setattr) and async/await
+//! - Process container operations (push/pop) and maintain data flow
+//!
+//! See docs/architecture/crates/parsers/maturity.md for detailed maturity criteria.
 
+use crate::catalog;
 use crate::languages::python::parse_python;
 use ir::{DFNodeKind, FileIR};
 
@@ -18,6 +27,7 @@ fn parse_snippet_with_path(code: &str, path: &str) -> FileIR {
 
 #[test]
 fn l6_fields_y_containers() {
+    catalog::extend("python", &["source"], &["sink"], &[]);
     let code = r#"
 cfg = object()
 cfg.endpoint = source()
@@ -87,6 +97,7 @@ sink(arr[0])
 
 #[test]
 fn l6_clave_inexistente_sin_flujo() {
+    catalog::extend("python", &["source"], &["sink"], &[]);
     let code = r#"
 m = {}
 sink(m["missing"])
@@ -104,6 +115,7 @@ sink(m["missing"])
 
 #[test]
 fn l6_indice_fuera_de_rango_sin_flujo() {
+    catalog::extend("python", &["source"], &["sink"], &[]);
     let code = r#"
 arr = [0]
 sink(arr[1])
@@ -121,6 +133,7 @@ sink(arr[1])
 
 #[test]
 fn l6_getattr_flujo() {
+    catalog::extend("python", &["source"], &["sink"], &[]);
     let code = r#"
 cfg = object()
 cfg.endpoint = source()
@@ -154,6 +167,7 @@ sink(v)
 
 #[test]
 fn l6_setattr_flujo() {
+    catalog::extend("python", &["source"], &["sink"], &[]);
     let code = r#"
 cfg = object()
 setattr(cfg, "endpoint", source())

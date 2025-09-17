@@ -1,9 +1,5 @@
-mod field_array_dfg;
-mod interproc;
-mod l1_ir;
-mod l2_aliasing;
-mod l3_dfg;
-mod l4_interproc;
-mod l5_branches;
-mod lambda_dfg;
-mod project;
+mod l1;
+mod l2;
+mod l3;
+mod l4;
+mod l5;

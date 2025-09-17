@@ -5,6 +5,7 @@ use std::fs;
 use std::path::{Component, Path};
 
 mod ast;
+pub mod catalog;
 mod dfg_builder;
 pub(crate) mod symbol_table;
 #[cfg(test)]

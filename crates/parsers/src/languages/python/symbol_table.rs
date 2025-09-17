@@ -503,19 +503,21 @@ pub(crate) fn build_dfg(
                     if let Some(call) = call_node.filter(|n| n.kind() == "call") {
                         let mut fname = String::new();
                         let mut callee = None;
+                        let mut fname_tail_buf = String::new();
+                        let mut is_source_call = false;
+                        let mut call_receivers: Vec<String> = Vec::new();
                         if let Some(func) = call.child_by_field_name("function") {
                             if let Ok(name) = func.utf8_text(src.as_bytes()) {
                                 fname = canonical_call_path(name, &fir.symbols);
-                                if let Some(&callee_id) =
-                                    fn_ids.get(fname.rsplit('.').next().unwrap_or(&fname))
-                                {
+                                let fname_tail = fname.rsplit('.').next().unwrap_or(&fname);
+                                fname_tail_buf = fname_tail.to_string();
+                                is_source_call = catalog::is_source("python", &fname)
+                                    || catalog::is_source("python", fname_tail);
+                                if let Some(&callee_id) = fn_ids.get(fname_tail) {
                                     dfg.call_returns.push((id, callee_id));
                                     callee = Some(callee_id);
                                 }
-                                if catalog::is_source(
-                                    "python",
-                                    fname.rsplit('.').next().unwrap_or(&fname),
-                                ) {
+                                if is_source_call {
                                     let pos = call.start_position();
                                     let id =
                                         stable_id(&fir.file_path, pos.row + 1, pos.column + 1, var);
@@ -537,9 +539,31 @@ pub(crate) fn build_dfg(
                                     );
                                 }
                             }
+                            // Capture the receiver of the call (e.g. request.args)
+                            match func.kind() {
+                                "attribute" => {
+                                    if let Some(obj) = func.child_by_field_name("object") {
+                                        gather_ids(obj, src, &mut call_receivers);
+                                    }
+                                }
+                                "identifier" => {
+                                    if let Ok(name) = func.utf8_text(src.as_bytes()) {
+                                        call_receivers.push(name.to_string());
+                                    }
+                                }
+                                "subscript" => {
+                                    gather_ids(func, src, &mut call_receivers);
+                                }
+                                _ => {}
+                            }
                         }
-                        let fname_tail = fname.rsplit('.').next().unwrap_or(&fname);
-                        if fname_tail == "getattr" {
+                        let fname_tail = if fname_tail_buf.is_empty() {
+                            fname.rsplit('.').next().unwrap_or(&fname).to_string()
+                        } else {
+                            fname_tail_buf
+                        };
+                        let fname_tail_str = fname_tail.as_str();
+                        if fname_tail_str == "getattr" {
                             if let Some(args) = call.child_by_field_name("arguments") {
                                 let mut ac = args.walk();
                                 let arg_nodes: Vec<tree_sitter::Node> =
@@ -569,6 +593,11 @@ pub(crate) fn build_dfg(
                             if let Some(args) = call.child_by_field_name("arguments") {
                                 gather_ids(args, src, &mut ids);
                             }
+                            for recv in call_receivers {
+                                if !ids.contains(&recv) {
+                                    ids.push(recv);
+                                }
+                            }
                             if let Some(callee_id) = callee {
                                 for (idx, src_name) in ids.iter().enumerate() {
                                     if src_name.as_str() == var {
@@ -582,11 +611,13 @@ pub(crate) fn build_dfg(
                                     }
                                 }
                             }
+                            let sink_call = catalog::is_sink("python", &fname)
+                                || catalog::is_sink("python", fname_tail_str);
                             let _ = dfg;
-                            if !catalog::is_source("python", fname_tail)
+                            if !is_source_call
                                 && (is_sanitizer(&fname, fir)
-                                    || is_sanitizer(fname_tail, fir)
-                                    || ids.is_empty())
+                                    || is_sanitizer(fname_tail_str, fir)
+                                    || (ids.is_empty() && !sink_call))
                             {
                                 let canonical = resolve_alias(var, &fir.symbols);
                                 if let Some(sym) = fir.symbols.get_mut(&canonical) {
@@ -1015,7 +1046,9 @@ pub(crate) fn build_dfg(
                             }
                         }
                     }
-                    if catalog::is_sink("python", part) {
+                    let sink_call =
+                        catalog::is_sink("python", &full) || catalog::is_sink("python", part);
+                    if sink_call {
                         if let Some(args) = node.child_by_field_name("arguments") {
                             let mut c = args.walk();
                             for arg in args.children(&mut c) {

@@ -1,7 +1,7 @@
-mod l1_flow;
-mod l2_aliasing;
-mod l3_dfg;
-mod l4_interproc;
-mod l5_branches;
-mod l6_props_arrays;
-mod l7_project;
+mod l1;
+mod l2;
+mod l3;
+mod l4;
+mod l5;
+mod l6;
+mod l7;

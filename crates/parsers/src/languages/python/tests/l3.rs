@@ -1,5 +1,13 @@
-//! Level 3 adds intra-procedural dataflow and a sanitizer catalog.
-//! See docs/docs/architecture/crates/parsers/maturity.md for details.
+//! Maturity Level L3 Tests for Python Parser
+//!
+//! This module contains tests that verify the parser can:
+//! - Build Def–Use DFG and intra taint with centralized catalog
+//! - Track data flow within functions (Def/Use/Assign)
+//! - Use central catalog of sources/sinks/sanitizers (extensible at runtime)
+//! - Build direct call graph (callee by simple name)
+//! - Handle taint propagation and sanitization
+//!
+//! See docs/architecture/crates/parsers/maturity.md for detailed maturity criteria.
 
 use crate::{catalog, languages::python::parse_python};
 use ir::{DFNodeKind, FileIR, SymbolKind};
@@ -208,6 +216,44 @@ fn augmented_assignment_creates_def_and_edge() {
         .map(|n| n.id)
         .expect("missing y def");
     assert!(dfg.edges.contains(&(y_def, x_def)));
+}
+
+#[test]
+fn request_args_bad_has_sink_use() {
+    let fir = parse_dfg_fixture("request_get_bad.py");
+    let sym = fir.symbols.get("command").expect("command symbol");
+    assert!(
+        !sym.sanitized,
+        "command should remain tainted when assigned from request args"
+    );
+    let def_id = sym.def.expect("command def id");
+    let dfg = fir.dfg.expect("dfg");
+    let use_node = dfg
+        .nodes
+        .iter()
+        .find(|n| n.name == "command" && matches!(n.kind, DFNodeKind::Use))
+        .expect("command use node");
+    assert!(
+        dfg.edges.contains(&(def_id, use_node.id)),
+        "expected def to connect to exec use"
+    );
+}
+
+#[test]
+fn request_args_safe_has_no_sink_use() {
+    let fir = parse_dfg_fixture("request_get_safe.py");
+    let sym = fir.symbols.get("command").expect("command symbol");
+    assert!(
+        !sym.sanitized,
+        "command stays tainted until sanitized explicitly"
+    );
+    let dfg = fir.dfg.expect("dfg");
+    assert!(
+        !dfg.nodes
+            .iter()
+            .any(|n| n.name == "command" && matches!(n.kind, DFNodeKind::Use)),
+        "safe handler should not create sink Use nodes"
+    );
 }
 
 // Augmented assignment without source adds no edge.

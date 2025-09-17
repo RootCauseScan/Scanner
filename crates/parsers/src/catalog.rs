@@ -13,39 +13,13 @@ static CATALOGS: OnceLock<RwLock<HashMap<String, Catalog>>> = OnceLock::new();
 fn catalogs() -> &'static RwLock<HashMap<String, Catalog>> {
     CATALOGS.get_or_init(|| {
         let mut map = HashMap::new();
-        map.insert(
-            "python".to_string(),
-            Catalog {
-                sources: HashSet::from(["source".into()]),
-                sinks: HashSet::from(["sink".into()]),
-                sanitizers: HashSet::from([
-                    "sanitize".into(),
-                    "clean".into(),
-                    "escape".into(),
-                    "html.escape".into(),
-                    "bleach.clean".into(),
-                ]),
-            },
-        );
-        map.insert(
-            "rust".to_string(),
-            Catalog {
-                sources: HashSet::from(["source".into()]),
-                sinks: HashSet::from(["sink".into(), "macro::println".into()]),
-                sanitizers: HashSet::from(["sanitize".into(), "clean".into(), "escape".into()]),
-            },
-        );
-        map.insert(
-            "java".to_string(),
-            Catalog {
-                sources: HashSet::new(),
-                sinks: HashSet::new(),
-                sanitizers: HashSet::from([
-                    "StringEscapeUtils.escapeHtml".into(),
-                    "org.apache.commons.text.StringEscapeUtils.escapeHtml".into(),
-                ]),
-            },
-        );
+        
+        // Load catalogs from language-specific modules
+        map.insert("python".to_string(), crate::languages::python::catalog::load_catalog());
+        map.insert("rust".to_string(), crate::languages::rust::catalog::load_catalog());
+        map.insert("java".to_string(), crate::languages::java::catalog::load_catalog());
+        map.insert("php".to_string(), crate::languages::php::catalog::load_catalog());
+        
         RwLock::new(map)
     })
 }

@@ -1,5 +1,13 @@
-//! Level 4 links arguments to parameters and returns to destinations.
-//! See docs/docs/architecture/crates/parsers/maturity.md for details.
+//! Maturity Level L4 Tests for Python Parser
+//!
+//! This module contains tests that verify the parser can:
+//! - Connect calls: args→params and returns→dest (basic interprocedural)
+//! - Track data flow across function boundaries (context-insensitive)
+//! - Link arg(i) → param(i) and return → callsite assignment
+//! - Propagate taint/sanitization through calls (without context)
+//! - Handle nested calls and method calls
+//!
+//! See docs/architecture/crates/parsers/maturity.md for detailed maturity criteria.
 
 use crate::languages::python::parse_python;
 use ir::{DFNodeKind, FileIR};

@@ -1,22 +1,35 @@
-//! Level 2 focuses on resolving imports and aliases into canonical names.
-//! See docs/docs/architecture/crates/parsers/maturity.md for details.
+//! Maturity Level L2 Tests for Python Parser
+//!
+//! This module contains tests that verify the parser can:
+//! - Resolve symbol names correctly (imports, aliases, namespaces)
+//! - Handle complex import statements (relative, wildcard)
+//! - Detect and handle import cycles
+//! - Understand qualified names and language-specific qualifiers
+//!
+//! See docs/architecture/crates/parsers/maturity.md for detailed maturity criteria.
 
 use crate::languages::python::parse_python;
 use ir::{DFNodeKind, FileIR, Symbol};
 use std::collections::{HashMap, HashSet};
 
+/// Helper function to parse Python code snippets for testing
 fn parse_snippet(code: &str) -> FileIR {
     let mut fir = FileIR::new("<mem>".into(), "python".into());
     parse_python(code, &mut fir).unwrap();
     fir
 }
 
+/// Helper function to parse Python code with a specific file path for relative imports
 fn parse_snippet_with_path(code: &str, path: &str) -> FileIR {
     let mut fir = FileIR::new(path.into(), "python".into());
     parse_python(code, &mut fir).unwrap();
     fir
 }
 
+/// Helper function to resolve aliases through the symbol table
+///
+/// This function follows the alias chain to find the canonical name,
+/// handling circular references gracefully.
 fn resolve_alias(name: &str, symbols: &HashMap<String, Symbol>) -> String {
     let mut name = name;
     let mut visited: HashSet<String> = HashSet::new();
@@ -36,14 +49,19 @@ fn resolve_alias(name: &str, symbols: &HashMap<String, Symbol>) -> String {
     last_alias.unwrap_or_else(|| name.to_string())
 }
 
-// Star imports should appear in IR.
+/// Test complex import statements including wildcard imports
+///
+/// This test verifies handling of:
+/// - Wildcard imports (from .mod import *)
+/// - Complex import statements
+/// - Proper IR node generation for imports
 #[test]
 fn l2_imports_compuestos() {
     let code = "from module import *\n";
     let fir = parse_snippet(code);
     assert!(
         fir.nodes.iter().any(|n| n.path == "import_from.module.*"),
-        "expected star import IR node",
+        "Star imports should appear in IR as import_from.module.* nodes",
     );
 }
 

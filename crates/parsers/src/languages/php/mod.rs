@@ -1,4 +1,4 @@
-use crate::ParserMetrics;
+use crate::{catalog as catalog_module, ParserMetrics};
 use anyhow::{anyhow, Context, Result};
 use ir::{
     AstNode, DFNode, DFNodeKind, DataFlowGraph, FileAst, FileIR, IRNode, Meta, Symbol, SymbolKind,
@@ -14,13 +14,7 @@ use tracing::debug;
 #[cfg(test)]
 mod tests;
 
-const SANITIZERS: &[&str] = &[
-    "htmlspecialchars",
-    "htmlentities",
-    "mysqli_real_escape_string",
-    "strip_tags",
-    "sanitize",
-];
+pub mod catalog;
 
 const SUPERGLOBALS: &[&str] = &[
     "_GET", "_POST", "_REQUEST", "_COOKIE", "_SERVER", "_ENV", "_FILES", "_SESSION", "GLOBALS",
@@ -83,7 +77,7 @@ pub fn parse_php(content: &str, fir: &mut FileIR) -> Result<()> {
     }
 
     fn is_sanitizer(name: &str, fir: &FileIR) -> bool {
-        SANITIZERS.contains(&name)
+        catalog_module::is_sanitizer("php", name)
             || matches!(fir.symbol_types.get(name), Some(SymbolKind::Sanitizer))
     }
 
