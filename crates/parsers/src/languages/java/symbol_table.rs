@@ -1,5 +1,5 @@
 use crate::catalog as catalog_module;
-use ir::{FileIR, Symbol, SymbolKind};
+use ir::{DFNodeKind, FileIR, Symbol, SymbolKind};
 use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -208,6 +208,24 @@ pub fn link_imports(modules: &mut HashMap<String, FileIR>) {
                 if entry.alias_of.is_none() {
                     entry.alias_of = Some(target.clone());
                 }
+                if entry.def.is_none() {
+                    if let Some((module_name, member)) = target.rsplit_once('.') {
+                        if let Some(target_fir) = snapshot.get(module_name) {
+                            if let Some(member_sym) = target_fir.symbols.get(member) {
+                                entry.def = member_sym.def;
+                                if member_sym.sanitized {
+                                    entry.sanitized = true;
+                                }
+                                fir_mut.symbols.entry(target.clone()).or_insert(Symbol {
+                                    name: target.clone(),
+                                    sanitized: member_sym.sanitized,
+                                    def: member_sym.def,
+                                    alias_of: None,
+                                });
+                            }
+                        }
+                    }
+                }
                 match action.kind {
                     ImportKind::Static | ImportKind::StaticWildcard => {
                         if let Some((module_path, _)) = target.rsplit_once('.') {
@@ -238,6 +256,48 @@ pub fn link_imports(modules: &mut HashMap<String, FileIR>) {
                 fir_mut
                     .symbol_types
                     .insert(alias.clone(), SymbolKind::Sanitizer);
+            }
+
+            if let Some(dfg) = &mut fir_mut.dfg {
+                let existing_edges = dfg.edges.clone();
+                let nodes_snapshot = dfg.nodes.clone();
+                for node in nodes_snapshot {
+                    let canonical = resolve_alias(&node.name, &fir_mut.symbols);
+                    if let Some(def_id) = fir_mut.symbols.get(&canonical).and_then(|s| s.def) {
+                        let should_link = match node.kind {
+                            DFNodeKind::Use => true,
+                            DFNodeKind::Def => fir_mut
+                                .symbols
+                                .get(&node.name)
+                                .and_then(|s| s.alias_of.as_ref())
+                                .is_some(),
+                            _ => false,
+                        };
+                        if should_link
+                            && !existing_edges
+                                .iter()
+                                .any(|&(src, dst)| src == def_id && dst == node.id)
+                            && !dfg
+                                .edges
+                                .iter()
+                                .any(|&(src, dst)| src == def_id && dst == node.id)
+                        {
+                            dfg.edges.push((def_id, node.id));
+                        }
+                        if should_link {
+                            if let Some(sym) = fir_mut.symbols.get(&canonical) {
+                                if sym.sanitized {
+                                    if let Some(local_node) = dfg.nodes.get_mut(node.id) {
+                                        local_node.sanitized = true;
+                                    }
+                                    if let Some(local_sym) = fir_mut.symbols.get_mut(&node.name) {
+                                        local_sym.sanitized = true;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
 
             propagate_sanitized(fir_mut);

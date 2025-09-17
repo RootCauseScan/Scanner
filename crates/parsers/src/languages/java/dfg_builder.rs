@@ -1,5 +1,5 @@
 use crate::catalog as catalog_module;
-use ir::{DFNode, DFNodeKind, DataFlowGraph, FileIR, Symbol, SymbolKind};
+use ir::{stable_id, DFNode, DFNodeKind, DataFlowGraph, FileIR, Symbol, SymbolKind};
 use std::collections::{HashMap, HashSet};
 use tree_sitter::Node;
 
@@ -193,14 +193,54 @@ fn resolve_import(
     out
 }
 
-fn merge_states(fir: &mut FileIR, states: Vec<HashMap<String, Symbol>>) {
+fn stable_node_id(fir: &FileIR, node: Option<Node>, key: &str) -> usize {
+    if let Some(n) = node {
+        let pos = n.start_position();
+        stable_id(&fir.file_path, pos.row + 1, pos.column + 1, key)
+    } else {
+        stable_id(&fir.file_path, 0, 0, key)
+    }
+}
+
+fn find_node_mut<'a>(dfg: &'a mut DataFlowGraph, id: usize) -> Option<&'a mut DFNode> {
+    dfg.nodes.iter_mut().find(|n| n.id == id)
+}
+
+fn push_node(fir: &mut FileIR, node: DFNode) {
+    fir.dfg
+        .get_or_insert_with(DataFlowGraph::default)
+        .nodes
+        .push(node);
+}
+
+fn push_edge(fir: &mut FileIR, edge: (usize, usize)) {
+    fir.dfg
+        .get_or_insert_with(DataFlowGraph::default)
+        .edges
+        .push(edge);
+}
+
+fn push_call_return(fir: &mut FileIR, entry: (usize, usize)) {
+    fir.dfg
+        .get_or_insert_with(DataFlowGraph::default)
+        .call_returns
+        .push(entry);
+}
+
+fn push_merge(fir: &mut FileIR, merge: (usize, Vec<usize>)) {
+    fir.dfg
+        .get_or_insert_with(DataFlowGraph::default)
+        .merges
+        .push(merge);
+}
+
+fn merge_states(fir: &mut FileIR, states: Vec<HashMap<String, Symbol>>, merge_counter: &mut usize) {
     let mut names = HashSet::new();
     for state in &states {
         for name in state.keys() {
             names.insert(name.clone());
         }
     }
-    let dfg = fir.dfg.get_or_insert_with(DataFlowGraph::default);
     let mut merged = HashMap::new();
     for name in names {
         let mut sanitized_all = true;
@@ -223,18 +263,23 @@ fn merge_states(fir: &mut FileIR, states: Vec<HashMap<String, Symbol>>) {
             0 => None,
             1 => Some(defs[0]),
             _ => {
-                let id = dfg.nodes.len();
-                dfg.nodes.push(DFNode {
-                    id,
-                    name: name.clone(),
-                    kind: DFNodeKind::Assign,
-                    sanitized: sanitized_all,
-                    branch: None,
-                });
+                let merge_idx = *merge_counter;
+                *merge_counter += 1;
+                let id = stable_node_id(fir, None, &format!("merge:{name}:{merge_idx}"));
+                push_node(
+                    fir,
+                    DFNode {
+                        id,
+                        name: name.clone(),
+                        kind: DFNodeKind::Assign,
+                        sanitized: sanitized_all,
+                        branch: None,
+                    },
+                );
                 for d in &defs {
-                    dfg.edges.push((*d, id));
+                    push_edge(fir, (*d, id));
                 }
-                dfg.merges.push((id, defs.clone()));
+                push_merge(fir, (id, defs.clone()));
                 Some(id)
             }
         };
@@ -267,7 +312,7 @@ fn propagate_sanitized(fir: &mut FileIR) {
             }
             for &(src, dst) in &edges {
                 if src == id {
-                    if let Some(node) = dfg.nodes.get_mut(dst) {
+                    if let Some(node) = find_node_mut(dfg, dst) {
                         if matches!(node.kind, DFNodeKind::Assign) && node.branch.is_none() {
                             continue;
                         }
@@ -302,20 +347,23 @@ fn build_dfg(
     call_args: &mut Vec<(usize, usize, usize)>,
     branch_stack: &mut Vec<usize>,
     branch_counter: &mut usize,
+    merge_counter: &mut usize,
 ) {
     match node.kind() {
         "method_declaration" => {
             if let Some(name_node) = node.child_by_field_name("name") {
                 if let Ok(name) = name_node.utf8_text(src.as_bytes()) {
-                    let dfg = fir.dfg.get_or_insert_with(DataFlowGraph::default);
-                    let id = dfg.nodes.len();
-                    dfg.nodes.push(DFNode {
-                        id,
-                        name: name.to_string(),
-                        kind: DFNodeKind::Def,
-                        sanitized: false,
-                        branch: branch_stack.last().copied(),
-                    });
+                    let id = stable_node_id(fir, Some(name_node), &format!("function:{name}"));
+                    push_node(
+                        fir,
+                        DFNode {
+                            id,
+                            name: name.to_string(),
+                            kind: DFNodeKind::Def,
+                            sanitized: false,
+                            branch: branch_stack.last().copied(),
+                        },
+                    );
                     fn_ids.insert(name.to_string(), id);
                     if let Some(params) = node.child_by_field_name("parameters") {
                         let mut pc = params.walk();
@@ -323,14 +371,21 @@ fn build_dfg(
                             if p.kind() == "formal_parameter" {
                                 if let Some(pn) = p.child_by_field_name("name") {
                                     if let Ok(pname) = pn.utf8_text(src.as_bytes()) {
-                                        let pid = dfg.nodes.len();
-                                        dfg.nodes.push(DFNode {
-                                            id: pid,
-                                            name: pname.to_string(),
-                                            kind: DFNodeKind::Param,
-                                            sanitized: false,
-                                            branch: branch_stack.last().copied(),
-                                        });
+                                        let pid = stable_node_id(
+                                            fir,
+                                            Some(pn),
+                                            &format!("param:{name}:{pname}"),
+                                        );
+                                        push_node(
+                                            fir,
+                                            DFNode {
+                                                id: pid,
+                                                name: pname.to_string(),
+                                                kind: DFNodeKind::Param,
+                                                sanitized: false,
+                                                branch: branch_stack.last().copied(),
+                                            },
+                                        );
                                         fn_params.entry(id).or_default().push(pid);
                                         fir.symbols.insert(
                                             pname.to_string(),
@@ -361,6 +416,7 @@ fn build_dfg(
                             call_args,
                             branch_stack,
                             branch_counter,
+                            merge_counter,
                         );
                     }
                     return;
@@ -406,15 +462,17 @@ fn build_dfg(
                                     }
                                 }
                             }
-                            let dfg = fir.dfg.get_or_insert_with(DataFlowGraph::default);
-                            let id = dfg.nodes.len();
-                            dfg.nodes.push(DFNode {
-                                id,
-                                name: var.to_string(),
-                                kind: DFNodeKind::Def,
-                                sanitized,
-                                branch: branch_stack.last().copied(),
-                            });
+                            let id = stable_node_id(fir, Some(name_node), &format!("local:{var}"));
+                            fir.dfg
+                                .get_or_insert_with(DataFlowGraph::default)
+                                .nodes
+                                .push(DFNode {
+                                    id,
+                                    name: var.to_string(),
+                                    kind: DFNodeKind::Def,
+                                    sanitized,
+                                    branch: branch_stack.last().copied(),
+                                });
                             let mut sym = Symbol {
                                 name: var.to_string(),
                                 sanitized,
@@ -432,8 +490,10 @@ fn build_dfg(
                                 if let Some(src_sym) = find_symbol(&canonical, &fir.symbols) {
                                     if src_sym.sanitized {
                                         sym.sanitized = true;
-                                        if let Some(n) = dfg.nodes.get_mut(id) {
-                                            n.sanitized = true;
+                                        if let Some(dfg) = fir.dfg.as_mut() {
+                                            if let Some(n) = find_node_mut(dfg, id) {
+                                                n.sanitized = true;
+                                            }
                                         }
                                     }
                                 }
@@ -443,7 +503,7 @@ fn build_dfg(
                                 if let Some(def_id) =
                                     find_symbol(&canonical, &fir.symbols).and_then(|s| s.def)
                                 {
-                                    dfg.edges.push((def_id, id));
+                                    push_edge(fir, (def_id, id));
                                 }
                             }
                             if let Some(val) = child.child_by_field_name("value") {
@@ -454,7 +514,7 @@ fn build_dfg(
                                         if let Some(&callee_id) =
                                             fn_ids.get(call.rsplit('.').next().unwrap_or(&call))
                                         {
-                                            dfg.call_returns.push((id, callee_id));
+                                            push_call_return(fir, (id, callee_id));
                                         }
                                     }
                                 }
@@ -515,15 +575,17 @@ fn build_dfg(
                         .and_then(|c| find_symbol(c, &fir.symbols))
                         .map(|s| s.sanitized)
                         .unwrap_or(false);
-                    let dfg = fir.dfg.get_or_insert_with(DataFlowGraph::default);
-                    let id = dfg.nodes.len();
-                    dfg.nodes.push(DFNode {
-                        id,
-                        name: var.to_string(),
-                        kind: DFNodeKind::Def,
-                        sanitized: sanitized || alias_sanitized,
-                        branch: branch_stack.last().copied(),
-                    });
+                    let id = stable_node_id(fir, Some(left), &format!("local:{var}"));
+                    fir.dfg
+                        .get_or_insert_with(DataFlowGraph::default)
+                        .nodes
+                        .push(DFNode {
+                            id,
+                            name: var.to_string(),
+                            kind: DFNodeKind::Def,
+                            sanitized: sanitized || alias_sanitized,
+                            branch: branch_stack.last().copied(),
+                        });
                     let canonical_names: Vec<String> = ids
                         .iter()
                         .map(|src_name| resolve_alias(src_name, &fir.symbols))
@@ -566,8 +628,10 @@ fn build_dfg(
                         sym.sanitized = true;
                     }
                     if sym.sanitized {
-                        if let Some(n) = dfg.nodes.get_mut(id) {
-                            n.sanitized = true;
+                        if let Some(dfg) = fir.dfg.as_mut() {
+                            if let Some(n) = find_node_mut(dfg, id) {
+                                n.sanitized = true;
+                            }
                         }
                     }
 
@@ -575,11 +639,17 @@ fn build_dfg(
                         if let Some(def_id) =
                             find_symbol(&canonical, &fir.symbols).and_then(|s| s.def)
                         {
-                            dfg.edges.push((def_id, id));
+                            fir.dfg
+                                .get_or_insert_with(DataFlowGraph::default)
+                                .edges
+                                .push((def_id, id));
                         }
                     }
                     if let Some(bid) = base_def_id {
-                        dfg.edges.push((bid, id));
+                        fir.dfg
+                            .get_or_insert_with(DataFlowGraph::default)
+                            .edges
+                            .push((bid, id));
                     }
                     if let Some(right) = node.child_by_field_name("right") {
                         if right.kind() != "lambda_expression" && right.kind() != "method_reference"
@@ -588,7 +658,10 @@ fn build_dfg(
                                 if let Some(&callee_id) =
                                     fn_ids.get(call.rsplit('.').next().unwrap_or(&call))
                                 {
-                                    dfg.call_returns.push((id, callee_id));
+                                    fir.dfg
+                                        .get_or_insert_with(DataFlowGraph::default)
+                                        .call_returns
+                                        .push((id, callee_id));
                                 }
                             }
                         }
@@ -597,28 +670,33 @@ fn build_dfg(
             }
         }
         "lambda_expression" => {
-            let dfg = fir.dfg.get_or_insert_with(DataFlowGraph::default);
-            let func_id = dfg.nodes.len();
+            let func_id = stable_node_id(fir, Some(node), "lambda");
             let lname = format!("lambda_{func_id}");
-            dfg.nodes.push(DFNode {
-                id: func_id,
-                name: lname,
-                kind: DFNodeKind::Def,
-                sanitized: false,
-                branch: branch_stack.last().copied(),
-            });
+            push_node(
+                fir,
+                DFNode {
+                    id: func_id,
+                    name: lname,
+                    kind: DFNodeKind::Def,
+                    sanitized: false,
+                    branch: branch_stack.last().copied(),
+                },
+            );
             if let Some(params) = node.child_by_field_name("parameters") {
                 let mut pnames = Vec::new();
                 gather_ids(params, src, &mut pnames);
                 for pname in pnames {
-                    let pid = dfg.nodes.len();
-                    dfg.nodes.push(DFNode {
-                        id: pid,
-                        name: pname.clone(),
-                        kind: DFNodeKind::Param,
-                        sanitized: false,
-                        branch: branch_stack.last().copied(),
-                    });
+                    let pid = stable_node_id(fir, None, &format!("lambda_param:{func_id}:{pname}"));
+                    push_node(
+                        fir,
+                        DFNode {
+                            id: pid,
+                            name: pname.clone(),
+                            kind: DFNodeKind::Param,
+                            sanitized: false,
+                            branch: branch_stack.last().copied(),
+                        },
+                    );
                     fn_params.entry(func_id).or_default().push(pid);
                     fir.symbols.insert(
                         pname.clone(),
@@ -646,6 +724,7 @@ fn build_dfg(
                         call_args,
                         branch_stack,
                         branch_counter,
+                        merge_counter,
                     );
                 } else {
                     let mut ids = Vec::new();
@@ -655,14 +734,21 @@ fn build_dfg(
                         let sanitized = find_symbol(&canonical, &fir.symbols)
                             .map(|s| s.sanitized)
                             .unwrap_or(false);
-                        let rid = dfg.nodes.len();
-                        dfg.nodes.push(DFNode {
-                            id: rid,
-                            name: name.clone(),
-                            kind: DFNodeKind::Return,
-                            sanitized,
-                            branch: branch_stack.last().copied(),
-                        });
+                        let rid = stable_node_id(
+                            fir,
+                            Some(body),
+                            &format!("lambda_ret:{func_id}:{name}"),
+                        );
+                        fir.dfg
+                            .get_or_insert_with(DataFlowGraph::default)
+                            .nodes
+                            .push(DFNode {
+                                id: rid,
+                                name: name.clone(),
+                                kind: DFNodeKind::Return,
+                                sanitized,
+                                branch: branch_stack.last().copied(),
+                            });
                         fir.symbols.entry(name.clone()).or_insert_with(|| Symbol {
                             name: name.clone(),
                             sanitized: false,
@@ -672,7 +758,10 @@ fn build_dfg(
                         if let Some(def_id) =
                             find_symbol(&canonical, &fir.symbols).and_then(|s| s.def)
                         {
-                            dfg.edges.push((def_id, rid));
+                            fir.dfg
+                                .get_or_insert_with(DataFlowGraph::default)
+                                .edges
+                                .push((def_id, rid));
                         }
                         fn_returns.entry(func_id).or_default().push(rid);
                     }
@@ -684,20 +773,22 @@ fn build_dfg(
             if let Some(cond) = node.child_by_field_name("condition") {
                 let mut ids = Vec::new();
                 gather_ids(cond, src, &mut ids);
-                let dfg = fir.dfg.get_or_insert_with(DataFlowGraph::default);
                 for name in ids {
                     let canonical = resolve_alias(&name, &fir.symbols);
                     let sanitized = find_symbol(&canonical, &fir.symbols)
                         .map(|s| s.sanitized)
                         .unwrap_or(false);
-                    let uid = dfg.nodes.len();
-                    dfg.nodes.push(DFNode {
-                        id: uid,
-                        name: name.clone(),
-                        kind: DFNodeKind::Use,
-                        sanitized,
-                        branch: branch_stack.last().copied(),
-                    });
+                    let uid = stable_node_id(fir, Some(cond), &format!("if_cond_use:{name}"));
+                    fir.dfg
+                        .get_or_insert_with(DataFlowGraph::default)
+                        .nodes
+                        .push(DFNode {
+                            id: uid,
+                            name: name.clone(),
+                            kind: DFNodeKind::Use,
+                            sanitized,
+                            branch: branch_stack.last().copied(),
+                        });
                     fir.symbols.entry(name.clone()).or_insert_with(|| Symbol {
                         name: name.clone(),
                         sanitized: false,
@@ -706,19 +797,24 @@ fn build_dfg(
                     });
                     if let Some(def_id) = find_symbol(&canonical, &fir.symbols).and_then(|s| s.def)
                     {
-                        dfg.edges.push((def_id, uid));
+                        fir.dfg
+                            .get_or_insert_with(DataFlowGraph::default)
+                            .edges
+                            .push((def_id, uid));
                     }
                 }
             }
-            let dfg = fir.dfg.get_or_insert_with(DataFlowGraph::default);
-            let bid = dfg.nodes.len();
-            dfg.nodes.push(DFNode {
-                id: bid,
-                name: "if".to_string(),
-                kind: DFNodeKind::Branch,
-                sanitized: false,
-                branch: branch_stack.last().copied(),
-            });
+            let bid = stable_node_id(fir, Some(node), "branch:if");
+            fir.dfg
+                .get_or_insert_with(DataFlowGraph::default)
+                .nodes
+                .push(DFNode {
+                    id: bid,
+                    name: "if".to_string(),
+                    kind: DFNodeKind::Branch,
+                    sanitized: false,
+                    branch: branch_stack.last().copied(),
+                });
             let before = fir.symbols.clone();
             let mut branch_states: Vec<HashMap<String, Symbol>> = Vec::new();
             if let Some(cons) = node.child_by_field_name("consequence") {
@@ -739,6 +835,7 @@ fn build_dfg(
                     call_args,
                     branch_stack,
                     branch_counter,
+                    merge_counter,
                 );
                 branch_states.push(fir.symbols.clone());
                 branch_stack.pop();
@@ -761,13 +858,14 @@ fn build_dfg(
                     call_args,
                     branch_stack,
                     branch_counter,
+                    merge_counter,
                 );
                 branch_states.push(fir.symbols.clone());
                 branch_stack.pop();
             } else {
                 branch_states.push(before.clone());
             }
-            merge_states(fir, branch_states);
+            merge_states(fir, branch_states, merge_counter);
             return;
         }
         "try_statement" => {
@@ -789,6 +887,7 @@ fn build_dfg(
                     call_args,
                     branch_stack,
                     branch_counter,
+                    merge_counter,
                 );
             } else {
                 let mut res_cursor = node.walk();
@@ -807,20 +906,23 @@ fn build_dfg(
                             call_args,
                             branch_stack,
                             branch_counter,
+                            merge_counter,
                         );
                     }
                 }
             }
 
-            let dfg = fir.dfg.get_or_insert_with(DataFlowGraph::default);
-            let bid = dfg.nodes.len();
-            dfg.nodes.push(DFNode {
-                id: bid,
-                name: "try".to_string(),
-                kind: DFNodeKind::Branch,
-                sanitized: false,
-                branch: branch_stack.last().copied(),
-            });
+            let bid = stable_node_id(fir, Some(node), "branch:try");
+            push_node(
+                fir,
+                DFNode {
+                    id: bid,
+                    name: "try".to_string(),
+                    kind: DFNodeKind::Branch,
+                    sanitized: false,
+                    branch: branch_stack.last().copied(),
+                },
+            );
 
             let before = fir.symbols.clone();
             let mut branch_states: Vec<HashMap<String, Symbol>> = Vec::new();
@@ -843,6 +945,7 @@ fn build_dfg(
                     call_args,
                     branch_stack,
                     branch_counter,
+                    merge_counter,
                 );
                 branch_states.push(fir.symbols.clone());
                 branch_stack.pop();
@@ -870,6 +973,7 @@ fn build_dfg(
                                 call_args,
                                 branch_stack,
                                 branch_counter,
+                                merge_counter,
                             );
                         }
                         let mut body = child.child_by_field_name("body");
@@ -896,6 +1000,7 @@ fn build_dfg(
                                 call_args,
                                 branch_stack,
                                 branch_counter,
+                                merge_counter,
                             );
                         }
                         branch_states.push(fir.symbols.clone());
@@ -930,6 +1035,7 @@ fn build_dfg(
                                 call_args,
                                 branch_stack,
                                 branch_counter,
+                                merge_counter,
                             );
                         }
                         branch_states.push(fir.symbols.clone());
@@ -943,19 +1049,21 @@ fn build_dfg(
                 branch_states.push(before);
             }
 
-            merge_states(fir, branch_states);
+            merge_states(fir, branch_states, merge_counter);
             return;
         }
         "while_statement" => {
-            let dfg = fir.dfg.get_or_insert_with(DataFlowGraph::default);
-            let nid = dfg.nodes.len();
-            dfg.nodes.push(DFNode {
-                id: nid,
-                name: "while".to_string(),
-                kind: DFNodeKind::Branch,
-                sanitized: false,
-                branch: branch_stack.last().copied(),
-            });
+            let nid = stable_node_id(fir, Some(node), "branch:while");
+            push_node(
+                fir,
+                DFNode {
+                    id: nid,
+                    name: "while".to_string(),
+                    kind: DFNodeKind::Branch,
+                    sanitized: false,
+                    branch: branch_stack.last().copied(),
+                },
+            );
             if let Some(cond) = node.child_by_field_name("condition") {
                 let mut ids = Vec::new();
                 gather_ids(cond, src, &mut ids);
@@ -964,14 +1072,17 @@ fn build_dfg(
                     let sanitized = find_symbol(&canonical, &fir.symbols)
                         .map(|s| s.sanitized)
                         .unwrap_or(false);
-                    let uid = dfg.nodes.len();
-                    dfg.nodes.push(DFNode {
-                        id: uid,
-                        name: name.clone(),
-                        kind: DFNodeKind::Use,
-                        sanitized,
-                        branch: branch_stack.last().copied(),
-                    });
+                    let uid = stable_node_id(fir, Some(cond), &format!("while_cond_use:{name}"));
+                    push_node(
+                        fir,
+                        DFNode {
+                            id: uid,
+                            name: name.clone(),
+                            kind: DFNodeKind::Use,
+                            sanitized,
+                            branch: branch_stack.last().copied(),
+                        },
+                    );
                     fir.symbols.entry(name.clone()).or_insert_with(|| Symbol {
                         name: name.clone(),
                         sanitized: false,
@@ -980,7 +1091,7 @@ fn build_dfg(
                     });
                     if let Some(def_id) = find_symbol(&canonical, &fir.symbols).and_then(|s| s.def)
                     {
-                        dfg.edges.push((def_id, uid));
+                        push_edge(fir, (def_id, uid));
                     }
                 }
             }
@@ -1004,12 +1115,13 @@ fn build_dfg(
                     call_args,
                     branch_stack,
                     branch_counter,
+                    merge_counter,
                 );
                 branch_states.push(fir.symbols.clone());
                 branch_stack.pop();
             }
             branch_states.push(before.clone());
-            merge_states(fir, branch_states);
+            merge_states(fir, branch_states, merge_counter);
             return;
         }
         "for_statement" => {
@@ -1027,17 +1139,20 @@ fn build_dfg(
                     call_args,
                     branch_stack,
                     branch_counter,
+                    merge_counter,
                 );
             }
-            let dfg = fir.dfg.get_or_insert_with(DataFlowGraph::default);
-            let nid = dfg.nodes.len();
-            dfg.nodes.push(DFNode {
-                id: nid,
-                name: "for".to_string(),
-                kind: DFNodeKind::Branch,
-                sanitized: false,
-                branch: branch_stack.last().copied(),
-            });
+            let nid = stable_node_id(fir, Some(node), "branch:for");
+            push_node(
+                fir,
+                DFNode {
+                    id: nid,
+                    name: "for".to_string(),
+                    kind: DFNodeKind::Branch,
+                    sanitized: false,
+                    branch: branch_stack.last().copied(),
+                },
+            );
             if let Some(cond) = node.child_by_field_name("condition") {
                 let mut ids = Vec::new();
                 gather_ids(cond, src, &mut ids);
@@ -1046,14 +1161,17 @@ fn build_dfg(
                     let sanitized = find_symbol(&canonical, &fir.symbols)
                         .map(|s| s.sanitized)
                         .unwrap_or(false);
-                    let uid = dfg.nodes.len();
-                    dfg.nodes.push(DFNode {
-                        id: uid,
-                        name: name.clone(),
-                        kind: DFNodeKind::Use,
-                        sanitized,
-                        branch: branch_stack.last().copied(),
-                    });
+                    let uid = stable_node_id(fir, Some(cond), &format!("for_cond_use:{name}"));
+                    push_node(
+                        fir,
+                        DFNode {
+                            id: uid,
+                            name: name.clone(),
+                            kind: DFNodeKind::Use,
+                            sanitized,
+                            branch: branch_stack.last().copied(),
+                        },
+                    );
                     fir.symbols.entry(name.clone()).or_insert_with(|| Symbol {
                         name: name.clone(),
                         sanitized: false,
@@ -1062,7 +1180,7 @@ fn build_dfg(
                     });
                     if let Some(def_id) = find_symbol(&canonical, &fir.symbols).and_then(|s| s.def)
                     {
-                        dfg.edges.push((def_id, uid));
+                        push_edge(fir, (def_id, uid));
                     }
                 }
             }
@@ -1086,6 +1204,7 @@ fn build_dfg(
                     call_args,
                     branch_stack,
                     branch_counter,
+                    merge_counter,
                 );
                 if let Some(update) = node.child_by_field_name("update") {
                     build_dfg(
@@ -1101,25 +1220,28 @@ fn build_dfg(
                         call_args,
                         branch_stack,
                         branch_counter,
+                        merge_counter,
                     );
                 }
                 branch_states.push(fir.symbols.clone());
                 branch_stack.pop();
             }
             branch_states.push(before.clone());
-            merge_states(fir, branch_states);
+            merge_states(fir, branch_states, merge_counter);
             return;
         }
         "enhanced_for_statement" => {
-            let dfg = fir.dfg.get_or_insert_with(DataFlowGraph::default);
-            let nid = dfg.nodes.len();
-            dfg.nodes.push(DFNode {
-                id: nid,
-                name: "for".to_string(),
-                kind: DFNodeKind::Branch,
-                sanitized: false,
-                branch: branch_stack.last().copied(),
-            });
+            let nid = stable_node_id(fir, Some(node), "branch:enhanced_for");
+            push_node(
+                fir,
+                DFNode {
+                    id: nid,
+                    name: "for".to_string(),
+                    kind: DFNodeKind::Branch,
+                    sanitized: false,
+                    branch: branch_stack.last().copied(),
+                },
+            );
             if let Some(val) = node.child_by_field_name("value") {
                 let mut ids = Vec::new();
                 gather_ids(val, src, &mut ids);
@@ -1128,14 +1250,17 @@ fn build_dfg(
                     let sanitized = find_symbol(&canonical, &fir.symbols)
                         .map(|s| s.sanitized)
                         .unwrap_or(false);
-                    let uid = dfg.nodes.len();
-                    dfg.nodes.push(DFNode {
-                        id: uid,
-                        name: name.clone(),
-                        kind: DFNodeKind::Use,
-                        sanitized,
-                        branch: branch_stack.last().copied(),
-                    });
+                    let uid = stable_node_id(fir, Some(val), &format!("enhanced_for_use:{name}"));
+                    push_node(
+                        fir,
+                        DFNode {
+                            id: uid,
+                            name: name.clone(),
+                            kind: DFNodeKind::Use,
+                            sanitized,
+                            branch: branch_stack.last().copied(),
+                        },
+                    );
                     fir.symbols.entry(name.clone()).or_insert_with(|| Symbol {
                         name: name.clone(),
                         sanitized: false,
@@ -1144,7 +1269,7 @@ fn build_dfg(
                     });
                     if let Some(def_id) = find_symbol(&canonical, &fir.symbols).and_then(|s| s.def)
                     {
-                        dfg.edges.push((def_id, uid));
+                        push_edge(fir, (def_id, uid));
                     }
                 }
             }
@@ -1168,24 +1293,27 @@ fn build_dfg(
                     call_args,
                     branch_stack,
                     branch_counter,
+                    merge_counter,
                 );
                 branch_states.push(fir.symbols.clone());
                 branch_stack.pop();
             }
             branch_states.push(before.clone());
-            merge_states(fir, branch_states);
+            merge_states(fir, branch_states, merge_counter);
             return;
         }
         "switch_statement" | "switch_expression" => {
-            let dfg = fir.dfg.get_or_insert_with(DataFlowGraph::default);
-            let nid = dfg.nodes.len();
-            dfg.nodes.push(DFNode {
-                id: nid,
-                name: "switch".to_string(),
-                kind: DFNodeKind::Branch,
-                sanitized: false,
-                branch: branch_stack.last().copied(),
-            });
+            let nid = stable_node_id(fir, Some(node), "branch:switch");
+            push_node(
+                fir,
+                DFNode {
+                    id: nid,
+                    name: "switch".to_string(),
+                    kind: DFNodeKind::Branch,
+                    sanitized: false,
+                    branch: branch_stack.last().copied(),
+                },
+            );
             if let Some(cond) = node
                 .child_by_field_name("value")
                 .or_else(|| node.child_by_field_name("condition"))
@@ -1197,14 +1325,17 @@ fn build_dfg(
                     let sanitized = find_symbol(&canonical, &fir.symbols)
                         .map(|s| s.sanitized)
                         .unwrap_or(false);
-                    let uid = dfg.nodes.len();
-                    dfg.nodes.push(DFNode {
-                        id: uid,
-                        name: name.clone(),
-                        kind: DFNodeKind::Use,
-                        sanitized,
-                        branch: branch_stack.last().copied(),
-                    });
+                    let uid = stable_node_id(fir, Some(cond), &format!("switch_cond_use:{name}"));
+                    push_node(
+                        fir,
+                        DFNode {
+                            id: uid,
+                            name: name.clone(),
+                            kind: DFNodeKind::Use,
+                            sanitized,
+                            branch: branch_stack.last().copied(),
+                        },
+                    );
                     fir.symbols.entry(name.clone()).or_insert_with(|| Symbol {
                         name: name.clone(),
                         sanitized: false,
@@ -1213,7 +1344,7 @@ fn build_dfg(
                     });
                     if let Some(def_id) = find_symbol(&canonical, &fir.symbols).and_then(|s| s.def)
                     {
-                        dfg.edges.push((def_id, uid));
+                        push_edge(fir, (def_id, uid));
                     }
                 }
             }
@@ -1262,6 +1393,7 @@ fn build_dfg(
                                 call_args,
                                 branch_stack,
                                 branch_counter,
+                                merge_counter,
                             );
                         }
                         branch_states.push(fir.symbols.clone());
@@ -1278,21 +1410,23 @@ fn build_dfg(
             if !has_default {
                 branch_states.push(before.clone());
             }
-            merge_states(fir, branch_states);
+            merge_states(fir, branch_states, merge_counter);
             return;
         }
         "method_reference" => {
             if let Ok(text) = node.utf8_text(src.as_bytes()) {
                 let name = text.replace("::", ".");
-                let dfg = fir.dfg.get_or_insert_with(DataFlowGraph::default);
-                let id = dfg.nodes.len();
-                dfg.nodes.push(DFNode {
-                    id,
-                    name,
-                    kind: DFNodeKind::Use,
-                    sanitized: false,
-                    branch: branch_stack.last().copied(),
-                });
+                let id = stable_node_id(fir, Some(node), &format!("method_ref:{name}"));
+                push_node(
+                    fir,
+                    DFNode {
+                        id,
+                        name,
+                        kind: DFNodeKind::Use,
+                        sanitized: false,
+                        branch: branch_stack.last().copied(),
+                    },
+                );
             }
             return;
         }
@@ -1300,19 +1434,21 @@ fn build_dfg(
             let mut ids = Vec::new();
             gather_ids(node, src, &mut ids);
             for name in ids {
-                let dfg = fir.dfg.get_or_insert_with(DataFlowGraph::default);
-                let id = dfg.nodes.len();
+                let id = stable_node_id(fir, Some(node), &format!("return:{name}"));
                 let canonical = resolve_alias(&name, &fir.symbols);
                 let sanitized = find_symbol(&canonical, &fir.symbols)
                     .map(|s| s.sanitized)
                     .unwrap_or(false);
-                dfg.nodes.push(DFNode {
-                    id,
-                    name: name.clone(),
-                    kind: DFNodeKind::Return,
-                    sanitized,
-                    branch: branch_stack.last().copied(),
-                });
+                push_node(
+                    fir,
+                    DFNode {
+                        id,
+                        name: name.clone(),
+                        kind: DFNodeKind::Return,
+                        sanitized,
+                        branch: branch_stack.last().copied(),
+                    },
+                );
                 fir.symbols.entry(name.clone()).or_insert_with(|| Symbol {
                     name: name.clone(),
                     sanitized: false,
@@ -1320,7 +1456,7 @@ fn build_dfg(
                     alias_of: None,
                 });
                 if let Some(def_id) = find_symbol(&canonical, &fir.symbols).and_then(|s| s.def) {
-                    dfg.edges.push((def_id, id));
+                    push_edge(fir, (def_id, id));
                 }
                 if let Some(func_id) = current_fn {
                     fn_returns.entry(func_id).or_default().push(id);
@@ -1364,21 +1500,24 @@ fn build_dfg(
                     let sanitized = find_symbol(&canonical, &fir.symbols)
                         .map(|s| s.sanitized)
                         .unwrap_or(false);
-                    let dfg = fir.dfg.get_or_insert_with(DataFlowGraph::default);
-                    let id = dfg.nodes.len();
-                    dfg.nodes.push(DFNode {
-                        id,
-                        name: var.to_string(),
-                        kind: DFNodeKind::Use,
-                        sanitized,
-                        branch: branch_stack.last().copied(),
-                    });
+                    let id =
+                        stable_node_id(fir, Some(obj_node), &format!("method_object_use:{var}"));
+                    push_node(
+                        fir,
+                        DFNode {
+                            id,
+                            name: var.to_string(),
+                            kind: DFNodeKind::Use,
+                            sanitized,
+                            branch: branch_stack.last().copied(),
+                        },
+                    );
                     if let Some(def_id) = find_symbol(&var, &fir.symbols).and_then(|s| s.def) {
-                        dfg.edges.push((def_id, id));
+                        push_edge(fir, (def_id, id));
                     } else if let Some(def_id) =
                         find_symbol(&canonical, &fir.symbols).and_then(|s| s.def)
                     {
-                        dfg.edges.push((def_id, id));
+                        push_edge(fir, (def_id, id));
                     }
                 }
             }
@@ -1394,24 +1533,27 @@ fn build_dfg(
                     let sanitized = find_symbol(&canonical, &fir.symbols)
                         .map(|s| s.sanitized)
                         .unwrap_or(false);
-                    let dfg = fir.dfg.get_or_insert_with(DataFlowGraph::default);
-                    let id = dfg.nodes.len();
-                    dfg.nodes.push(DFNode {
-                        id,
-                        name: var.to_string(),
-                        kind: DFNodeKind::Use,
-                        sanitized,
-                        branch: branch_stack.last().copied(),
-                    });
+                    let id =
+                        stable_node_id(fir, Some(*arg), &format!("method_arg_use:{idx}:{var}"));
+                    push_node(
+                        fir,
+                        DFNode {
+                            id,
+                            name: var.to_string(),
+                            kind: DFNodeKind::Use,
+                            sanitized,
+                            branch: branch_stack.last().copied(),
+                        },
+                    );
                     if let Some(def_id) = find_symbol(&var, &fir.symbols).and_then(|s| s.def) {
-                        dfg.edges.push((def_id, id));
+                        push_edge(fir, (def_id, id));
                         if let Some(cid) = callee {
                             call_args.push((def_id, cid, idx));
                         }
                     } else if let Some(def_id) =
                         find_symbol(&canonical, &fir.symbols).and_then(|s| s.def)
                     {
-                        dfg.edges.push((def_id, id));
+                        push_edge(fir, (def_id, id));
                         if let Some(cid) = callee {
                             call_args.push((def_id, cid, idx));
                         }
@@ -1492,15 +1634,21 @@ fn build_dfg(
                             sanitized_value = true;
                         }
 
-                        let dfg = fir.dfg.get_or_insert_with(DataFlowGraph::default);
-                        let def_id = dfg.nodes.len();
-                        dfg.nodes.push(DFNode {
-                            id: def_id,
-                            name: field.clone(),
-                            kind: DFNodeKind::Def,
-                            sanitized: sanitized_value,
-                            branch: branch_stack.last().copied(),
-                        });
+                        let def_id = stable_node_id(
+                            fir,
+                            Some(*value_node),
+                            &format!("method_field_def:{field}"),
+                        );
+                        push_node(
+                            fir,
+                            DFNode {
+                                id: def_id,
+                                name: field.clone(),
+                                kind: DFNodeKind::Def,
+                                sanitized: sanitized_value,
+                                branch: branch_stack.last().copied(),
+                            },
+                        );
 
                         {
                             let entry =
@@ -1519,7 +1667,7 @@ fn build_dfg(
                             if let Some(def_src) =
                                 find_symbol(&canonical, &fir.symbols).and_then(|s| s.def)
                             {
-                                dfg.edges.push((def_src, def_id));
+                                push_edge(fir, (def_src, def_id));
                             }
                         }
                     }
@@ -1532,18 +1680,21 @@ fn build_dfg(
                     let sanitized = find_symbol(&canonical, &fir.symbols)
                         .map(|s| s.sanitized)
                         .unwrap_or(false);
-                    let dfg = fir.dfg.get_or_insert_with(DataFlowGraph::default);
-                    let use_id = dfg.nodes.len();
-                    dfg.nodes.push(DFNode {
-                        id: use_id,
-                        name: field,
-                        kind: DFNodeKind::Use,
-                        sanitized,
-                        branch: branch_stack.last().copied(),
-                    });
+                    let use_id =
+                        stable_node_id(fir, Some(node), &format!("method_field_use:{field}"));
+                    push_node(
+                        fir,
+                        DFNode {
+                            id: use_id,
+                            name: field,
+                            kind: DFNodeKind::Use,
+                            sanitized,
+                            branch: branch_stack.last().copied(),
+                        },
+                    );
                     if let Some(def_id) = find_symbol(&canonical, &fir.symbols).and_then(|s| s.def)
                     {
-                        dfg.edges.push((def_id, use_id));
+                        push_edge(fir, (def_id, use_id));
                     }
                 }
             }
@@ -1566,21 +1717,24 @@ fn build_dfg(
                         let sanitized = find_symbol(&canonical, &fir.symbols)
                             .map(|s| s.sanitized)
                             .unwrap_or(false);
-                        let dfg = fir.dfg.get_or_insert_with(DataFlowGraph::default);
-                        let id = dfg.nodes.len();
-                        dfg.nodes.push(DFNode {
-                            id,
-                            name: var.to_string(),
-                            kind: DFNodeKind::Use,
-                            sanitized,
-                            branch: branch_stack.last().copied(),
-                        });
+                        let id =
+                            stable_node_id(fir, Some(arg), &format!("object_create_use:{var}"));
+                        push_node(
+                            fir,
+                            DFNode {
+                                id,
+                                name: var.to_string(),
+                                kind: DFNodeKind::Use,
+                                sanitized,
+                                branch: branch_stack.last().copied(),
+                            },
+                        );
                         if let Some(def_id) = find_symbol(&var, &fir.symbols).and_then(|s| s.def) {
-                            dfg.edges.push((def_id, id));
+                            push_edge(fir, (def_id, id));
                         } else if let Some(def_id) =
                             find_symbol(&canonical, &fir.symbols).and_then(|s| s.def)
                         {
-                            dfg.edges.push((def_id, id));
+                            push_edge(fir, (def_id, id));
                         }
                     }
                 }
@@ -1603,6 +1757,7 @@ fn build_dfg(
             call_args,
             branch_stack,
             branch_counter,
+            merge_counter,
         );
     }
 }
@@ -1621,6 +1776,7 @@ fn build_dfg_tolerant(
     call_args: &mut Vec<(usize, usize, usize)>,
     branch_stack: &mut Vec<usize>,
     branch_counter: &mut usize,
+    merge_counter: &mut usize,
 ) {
     if node.is_error() {
         return;
@@ -1641,6 +1797,7 @@ fn build_dfg_tolerant(
                 call_args,
                 branch_stack,
                 branch_counter,
+                merge_counter,
             );
         }
     } else {
@@ -1657,6 +1814,7 @@ fn build_dfg_tolerant(
             call_args,
             branch_stack,
             branch_counter,
+            merge_counter,
         );
     }
 }
@@ -1674,6 +1832,7 @@ pub fn build(
     let mut call_args: Vec<(usize, usize, usize)> = Vec::new();
     let mut branch_stack: Vec<usize> = Vec::new();
     let mut branch_counter: usize = 0;
+    let mut merge_counter: usize = 0;
     let has_errors = root.has_error() || root.is_error();
 
     if has_errors {
@@ -1690,6 +1849,7 @@ pub fn build(
             &mut call_args,
             &mut branch_stack,
             &mut branch_counter,
+            &mut merge_counter,
         );
     } else {
         build_dfg(
@@ -1705,6 +1865,7 @@ pub fn build(
             &mut call_args,
             &mut branch_stack,
             &mut branch_counter,
+            &mut merge_counter,
         );
     }
 
