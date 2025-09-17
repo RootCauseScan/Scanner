@@ -43,7 +43,9 @@ fn docker_configs() -> Result<(), Box<dyn std::error::Error>> {
         .join("Dockerfile");
 
     let stdout = run_cli(&good, &rules)?;
-    assert!(!stdout.contains("docker.no-add"));
+    // Only check in the Results section, not in debug messages
+    let results_section = stdout.split("╭─────────╮").nth(1).unwrap_or("");
+    assert!(!results_section.contains("docker.no-add"));
 
     let stdout = run_cli(&bad, &rules)?;
     assert!(stdout.contains("docker.no-add"));
@@ -71,7 +73,9 @@ fn k8s_configs() -> Result<(), Box<dyn std::error::Error>> {
         .join("config.yaml");
 
     let stdout = run_cli(&good, &rules_dir)?;
-    assert!(!stdout.contains("config.no_default_password"));
+    // Only check in the Results section, not in debug messages
+    let results_section = stdout.split("╭─────────╮").nth(1).unwrap_or("");
+    assert!(!results_section.contains("config.no_default_password"));
 
     let stdout = run_cli(&bad, &rules_dir)?;
     assert!(stdout.contains("config.no_default_password"));

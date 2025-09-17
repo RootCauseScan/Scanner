@@ -359,8 +359,9 @@ maintainer = "RootCause Security Team <contact@rootcause.dev>"
     let mut ruleset = loader::load_rules(&args.rules)?;
 
     // Only load extra rules from the configuration if we're using the default directory
+    // and the rules path is a directory (not a single file)
     let default_rules_dir = config_dir().join("rules");
-    if args.rules == default_rules_dir {
+    if args.rules == default_rules_dir && args.rules.is_dir() {
         let cfg_rule_dirs: Vec<PathBuf> = user_cfg
             .rules
             .rule_dirs
@@ -380,21 +381,31 @@ maintainer = "RootCause Security Team <contact@rootcause.dev>"
             }
         }
     }
+    
+    // If we're loading a single file, don't load any additional rules
+    if !args.rules.is_dir() {
+        // Reset and only load the specified file
+        ruleset.rules.clear();
+        ruleset = loader::load_rules(&args.rules)?;
+    }
     info!(count = ruleset.rules.len(), "Rules loaded");
     // Load rules exposed by plugins with the `rules` capability
-    for plugin in &infos {
-        if plugin.manifest.capabilities.iter().any(|c| c == "rules") {
-            let rules_path = plugin.path.join("rules");
-            if rules_path.is_dir() {
-                let plugin_rules = loader::load_rules(&rules_path)?;
-                let added = plugin_rules.rules.len();
-                ruleset.rules.extend(plugin_rules.rules);
-                let plugin_name = plugin
-                    .manifest
-                    .name
-                    .clone()
-                    .unwrap_or_else(|| plugin.path.display().to_string());
-                info!(plugin = %plugin_name, count = added, "Plugin rules loaded");
+    // Only load plugin rules if we're using a directory (not a single file)
+    if args.rules.is_dir() {
+        for plugin in &infos {
+            if plugin.manifest.capabilities.iter().any(|c| c == "rules") {
+                let rules_path = plugin.path.join("rules");
+                if rules_path.is_dir() {
+                    let plugin_rules = loader::load_rules(&rules_path)?;
+                    let added = plugin_rules.rules.len();
+                    ruleset.rules.extend(plugin_rules.rules);
+                    let plugin_name = plugin
+                        .manifest
+                        .name
+                        .clone()
+                        .unwrap_or_else(|| plugin.path.display().to_string());
+                    info!(plugin = %plugin_name, count = added, "Plugin rules loaded");
+                }
             }
         }
     }

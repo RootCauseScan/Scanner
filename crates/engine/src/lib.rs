@@ -218,6 +218,8 @@ pub struct Finding {
     pub id: String,
     /// Rule that generated the finding.
     pub rule_id: String,
+    /// File where the rule is defined.
+    pub rule_file: Option<String>,
     /// Severity assigned by the rule.
     pub severity: Severity,
     /// Path of the affected file.
@@ -844,6 +846,7 @@ fn eval_rule_impl(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
                         Some(Finding {
                             id,
                             rule_id: rule.id.clone(),
+                            rule_file: rule.source_file.clone(),
                             severity: rule.severity,
                             file: PathBuf::from(&file.file_path),
                             line: line_num,
@@ -884,6 +887,7 @@ fn eval_rule_impl(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
                                     findings.push(Finding {
                                         id,
                                         rule_id: rule.id.clone(),
+                                        rule_file: rule.source_file.clone(),
                                         severity: rule.severity,
                                         file: PathBuf::from(&file.file_path),
                                         line: line_num,
@@ -1022,6 +1026,7 @@ fn eval_rule_impl(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
                             findings.push(Finding {
                                 id,
                                 rule_id: rule.id.clone(),
+                                rule_file: rule.source_file.clone(),
                                 severity: rule.severity,
                                 file: PathBuf::from(&file.file_path),
                                 line,
@@ -1091,6 +1096,7 @@ fn eval_rule_impl(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
                         findings.push(Finding {
                             id,
                             rule_id: rule.id.clone(),
+                            rule_file: rule.source_file.clone(),
                             severity: rule.severity,
                             file: PathBuf::from(&file.file_path),
                             line,
@@ -1171,6 +1177,7 @@ fn eval_rule_impl(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
                                     findings.push(Finding {
                                         id,
                                         rule_id: rule.id.clone(),
+                                        rule_file: rule.source_file.clone(),
                                         severity: rule.severity,
                                         file: PathBuf::from(&file.file_path),
                                         line,
@@ -1222,6 +1229,7 @@ fn eval_rule_impl(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
                         .to_hex()
                         .to_string(),
                         rule_id: rule.id.clone(),
+                        rule_file: rule.source_file.clone(),
                         severity: rule.severity,
                         file: PathBuf::from(&file.file_path),
                         line: m.line,
@@ -1792,6 +1800,7 @@ fn eval_rule_impl(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
                     findings.push(Finding {
                         id,
                         rule_id: rule.id.clone(),
+                        rule_file: rule.source_file.clone(),
                         severity: rule.severity,
                         file: PathBuf::from(&file.file_path),
                         line: *line,
@@ -1826,6 +1835,7 @@ fn eval_rule_impl(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
                         findings.push(Finding {
                             id,
                             rule_id: rule.id.clone(),
+                            rule_file: rule.source_file.clone(),
                             severity,
                             file: PathBuf::from(&file.file_path),
                             line: *line,
@@ -1846,7 +1856,7 @@ fn eval_rule_impl(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
         file: PathBuf::from(&file.file_path),
         matched: !findings.is_empty(),
     });
-    debug!("eval_rule_impl: Final return with {} findings for rule '{}' and file '{}'", findings.len(), rule.id, file.file_path);
+    debug!("Final return with {} findings for rule '{}' and file '{}'", findings.len(), rule.id, file.file_path);
     findings
 }
 
@@ -1951,6 +1961,7 @@ fn parse_rego_output(
         Finding {
             id,
             rule_id: rule.id.clone(),
+            rule_file: rule.source_file.clone(),
             severity: rule.severity,
             file: PathBuf::from(&file.file_path),
             line,
@@ -1980,6 +1991,7 @@ fn parse_rego_output(
                                 findings.push(Finding {
                                     id,
                                     rule_id: rule.id.clone(),
+                                    rule_file: rule.source_file.clone(),
                                     severity: rule.severity,
                                     file: PathBuf::from(&file.file_path),
                                     line: 0,
@@ -2004,6 +2016,7 @@ fn parse_rego_output(
                 findings.push(Finding {
                     id,
                     rule_id: rule.id.clone(),
+                    rule_file: rule.source_file.clone(),
                     severity: rule.severity,
                     file: PathBuf::from(&file.file_path),
                     line: 0,
@@ -2026,6 +2039,7 @@ fn parse_rego_output(
                     Some(Finding {
                         id,
                         rule_id: rule.id.clone(),
+                        rule_file: rule.source_file.clone(),
                         severity: rule.severity,
                         file: PathBuf::from(&file.file_path),
                         line: 0,
@@ -2085,6 +2099,7 @@ fn ast_query_findings(
             out.push(Finding {
                 id,
                 rule_id: rule.id.clone(),
+                rule_file: rule.source_file.clone(),
                 severity: rule.severity,
                 file: PathBuf::from(&ast.file_path),
                 line: node.meta.line,
@@ -2255,6 +2270,7 @@ fn jsonpath_findings(
                 out.push(Finding {
                     id,
                     rule_id: rule.id.clone(),
+                    rule_file: rule.source_file.clone(),
                     severity: rule.severity,
                     file: PathBuf::from(&file.file_path),
                     line: n.meta.line,

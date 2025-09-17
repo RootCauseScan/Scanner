@@ -20,6 +20,7 @@ fn write_and_load_preserve_metadata() -> anyhow::Result<()> {
     let finding = Finding {
         id: "id1".into(),
         rule_id: "rule".into(),
+        rule_file: Some("test.yaml".into()),
         severity: Severity::Low,
         file: PathBuf::from("f.yaml"),
         line: 1,

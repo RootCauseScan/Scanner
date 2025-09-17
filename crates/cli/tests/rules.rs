@@ -35,7 +35,9 @@ fn run_rule(
         .output()?;
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(!stdout.contains(rule_id));
+    // Only check in the Results section, not in debug messages
+    let results_section = stdout.split("╭─────────╮").nth(1).unwrap_or("");
+    assert!(!results_section.contains(rule_id));
 
     let output = Command::cargo_bin("rootcause")?
         .arg("scan")

@@ -347,6 +347,79 @@ pub fn load_rules(dir: &Path) -> anyhow::Result<RuleSet> {
             .map(|name| name == ".git")
             .unwrap_or(false)
     };
+    
+    // If the path is a single file, only process that file
+    if dir.is_file() {
+        let name = dir.file_name().and_then(|s| s.to_str()).unwrap_or("");
+        debug!(file = %dir.display(), "Processing single rule file");
+        if name.ends_with(".wasm") {
+            debug!(file = %dir.display(), "Parsing WASM rule");
+            compile_wasm_rule(&mut rs, &mut seen_ids, dir, dir.parent().unwrap_or(Path::new(".")))
+                .with_context(|| format!("Failed to parse WASM rule file: {}", dir.display()))?;
+        } else if (name.ends_with(".yaml") || name.ends_with(".yml")) && !name.contains(".wasm.") {
+            debug!(file = %dir.display(), "Parsing YAML rule");
+            let data = fs::read_to_string(dir)
+                .with_context(|| format!("Failed to read rule file: {}", dir.display()))?;
+            let doc: YamlValue = serde_yaml::from_str(&data)
+                .with_context(|| format!("Failed to parse rule file: {}", dir.display()))?;
+            if let Some(rules) = doc.get("rules").and_then(|v| v.as_sequence()) {
+                for r in rules {
+                    if r.get("pattern").is_some()
+                        || r.get("pattern-not").is_some()
+                        || r.get("pattern-either").is_some()
+                        || r.get("patterns").is_some()
+                        || r.get("pattern-sources").is_some()
+                        || r.get("pattern-sinks").is_some()
+                        || r.get("pattern-regex").is_some()
+                        || r.get("metavariable-pattern").is_some()
+                    {
+                        let sr: SemgrepRule =
+                            serde_yaml::from_value(r.clone()).with_context(|| {
+                                format!("Failed to parse rule file: {}", dir.display())
+                            })?;
+                        compile_semgrep_rule(&mut rs, &mut seen_ids, sr, dir, dir.parent().unwrap_or(Path::new(".")))?;
+                    } else {
+                        let yr: YamlRule =
+                            serde_yaml::from_value(r.clone()).with_context(|| {
+                                format!("Failed to parse rule file: {}", dir.display())
+                            })?;
+                        compile_yaml_rule(&mut rs, &mut seen_ids, yr, dir, dir.parent().unwrap_or(Path::new(".")))?;
+                    }
+                }
+            }
+        } else if name.ends_with(".json") && !name.contains(".wasm.") {
+            debug!(file = %dir.display(), "Parsing JSON rule");
+            let data = fs::read_to_string(dir)
+                .with_context(|| format!("Failed to read rule file: {}", dir.display()))?;
+            let v: serde_json::Value = serde_json::from_str(&data)
+                .with_context(|| format!("Failed to parse rule file: {}", dir.display()))?;
+            if let Some(obj) = v.get("rules").and_then(|v| v.as_object()) {
+                for (ns, category_obj) in obj {
+                    if let Some(inner) = category_obj.as_object() {
+                        for (id, rule_v) in inner {
+                            let jr: JsonRule = serde_json::from_value(rule_v.clone())
+                                .with_context(|| {
+                                    format!("Failed to parse rule file: {}", dir.display())
+                                })?;
+                            compile_json_rule(
+                                &mut rs,
+                                &mut seen_ids,
+                                format!("{ns}.{id}"),
+                                jr,
+                                dir,
+                                dir.parent().unwrap_or(Path::new(".")),
+                            )?;
+                        }
+                    }
+                }
+            }
+        } else {
+            debug!(file = %dir.display(), "Skipping non-rule file");
+        }
+        return Ok(rs);
+    }
+    
+    // If it's a directory, recursively visit all files
     visit(dir, &excl, &mut |path| {
         let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
         debug!(file = %path.display(), "Discovered rule candidate");
@@ -1049,6 +1122,8 @@ fn compile_semgrep_rule(
     if !seen.insert(sr.id.clone()) {
         anyhow::bail!("duplicate rule id: {}", sr.id);
     }
+    debug!("Compiling Semgrep rule: {} from file: {}", sr.id, file_path.display());
+    debug!("Rule mode: {:?}", sr.mode);
     let severity: Severity = sr
         .severity
         .as_deref()
@@ -1136,6 +1211,7 @@ fn compile_semgrep_rule(
     }
 
     if !sources.is_empty() || !sinks.is_empty() {
+        debug!("Creating TaintRule with {} sources and {} sinks", sources.len(), sinks.len());
         rs.rules.push(CompiledRule {
             id: sr.id,
             severity,

@@ -70,6 +70,7 @@ mod tests {
         let findings = vec![Finding {
             id,
             rule_id: "rule".into(),
+            rule_file: Some("test.yaml".into()),
             severity: Severity::High,
             file: PathBuf::from("src/main.rs"),
             line: 10,

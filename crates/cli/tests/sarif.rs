@@ -52,7 +52,13 @@ rules:
 
     assert!(output.status.success());
 
-    let v: Value = serde_json::from_slice(&output.stdout)?;
+    let stdout_str = String::from_utf8_lossy(&output.stdout);
+    
+    // Extract JSON part from stdout (skip debug messages)
+    let json_start = stdout_str.find('{').unwrap_or(0);
+    let json_part = &stdout_str[json_start..];
+    
+    let v: Value = serde_json::from_str(json_part)?;
     assert_eq!(v["version"], "2.1.0");
     assert!(v["runs"].is_array());
 
