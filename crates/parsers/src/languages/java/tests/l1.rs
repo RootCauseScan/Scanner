@@ -199,3 +199,27 @@ class S {
     assert!(fir.nodes.iter().any(|n| n.path == "call.baz"));
     assert!(!fir.nodes.iter().any(|n| n.path == "call.foo.baz"));
 }
+
+// Parser should recover from syntax errors and still produce partial IR.
+#[test]
+fn l1_syntax_error_handling() {
+    let code = r#"class Broken {
+    void demo() {
+        System.out.println("hi");
+        if (
+    }
+}
+"#;
+    let fir = parse_snippet(code);
+
+    assert!(
+        fir.symbol_types.contains_key("__parse_error__"),
+        "parser should flag parse errors with special symbol",
+    );
+    assert!(
+        fir.nodes
+            .iter()
+            .any(|n| n.path == "call.System.out.println"),
+        "partial IR should be produced even when syntax errors exist",
+    );
+}
