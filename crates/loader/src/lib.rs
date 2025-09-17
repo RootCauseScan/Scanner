@@ -224,10 +224,7 @@ impl AnyRegex {
         }
     }
 
-    pub fn find_iter<'a>(
-        &'a self,
-        text: &'a str,
-    ) -> Box<dyn Iterator<Item = (usize, usize)> + 'a> {
+    pub fn find_iter<'a>(&'a self, text: &'a str) -> Box<dyn Iterator<Item = (usize, usize)> + 'a> {
         match self {
             Self::Std(r) => Box::new(r.find_iter(text).map(|m| (m.start(), m.end()))),
             Self::Fancy(r) => Box::new(
@@ -240,14 +237,14 @@ impl AnyRegex {
 
     pub fn captures<'a>(&'a self, text: &'a str) -> Option<AnyCaptures<'a>> {
         match self {
-            Self::Std(r) => r.captures(text).map(|caps| {
-                AnyCaptures {
-                    get_fn: Box::new(move |idx| caps.get(idx).map(|m| AnyMatch { text: m.as_str() })),
-                }
+            Self::Std(r) => r.captures(text).map(|caps| AnyCaptures {
+                get_fn: Box::new(move |idx| caps.get(idx).map(|m| AnyMatch { text: m.as_str() })),
             }),
             Self::Fancy(r) => match r.captures(text) {
                 Ok(Some(caps)) => Some(AnyCaptures {
-                    get_fn: Box::new(move |idx| caps.get(idx).map(|m| AnyMatch { text: m.as_str() })),
+                    get_fn: Box::new(move |idx| {
+                        caps.get(idx).map(|m| AnyMatch { text: m.as_str() })
+                    }),
                 }),
                 _ => None,
             },
@@ -347,15 +344,20 @@ pub fn load_rules(dir: &Path) -> anyhow::Result<RuleSet> {
             .map(|name| name == ".git")
             .unwrap_or(false)
     };
-    
+
     // If the path is a single file, only process that file
     if dir.is_file() {
         let name = dir.file_name().and_then(|s| s.to_str()).unwrap_or("");
         debug!(file = %dir.display(), "Processing single rule file");
         if name.ends_with(".wasm") {
             debug!(file = %dir.display(), "Parsing WASM rule");
-            compile_wasm_rule(&mut rs, &mut seen_ids, dir, dir.parent().unwrap_or(Path::new(".")))
-                .with_context(|| format!("Failed to parse WASM rule file: {}", dir.display()))?;
+            compile_wasm_rule(
+                &mut rs,
+                &mut seen_ids,
+                dir,
+                dir.parent().unwrap_or(Path::new(".")),
+            )
+            .with_context(|| format!("Failed to parse WASM rule file: {}", dir.display()))?;
         } else if (name.ends_with(".yaml") || name.ends_with(".yml")) && !name.contains(".wasm.") {
             debug!(file = %dir.display(), "Parsing YAML rule");
             let data = fs::read_to_string(dir)
@@ -377,13 +379,25 @@ pub fn load_rules(dir: &Path) -> anyhow::Result<RuleSet> {
                             serde_yaml::from_value(r.clone()).with_context(|| {
                                 format!("Failed to parse rule file: {}", dir.display())
                             })?;
-                        compile_semgrep_rule(&mut rs, &mut seen_ids, sr, dir, dir.parent().unwrap_or(Path::new(".")))?;
+                        compile_semgrep_rule(
+                            &mut rs,
+                            &mut seen_ids,
+                            sr,
+                            dir,
+                            dir.parent().unwrap_or(Path::new(".")),
+                        )?;
                     } else {
                         let yr: YamlRule =
                             serde_yaml::from_value(r.clone()).with_context(|| {
                                 format!("Failed to parse rule file: {}", dir.display())
                             })?;
-                        compile_yaml_rule(&mut rs, &mut seen_ids, yr, dir, dir.parent().unwrap_or(Path::new(".")))?;
+                        compile_yaml_rule(
+                            &mut rs,
+                            &mut seen_ids,
+                            yr,
+                            dir,
+                            dir.parent().unwrap_or(Path::new(".")),
+                        )?;
                     }
                 }
             }
@@ -418,7 +432,7 @@ pub fn load_rules(dir: &Path) -> anyhow::Result<RuleSet> {
         }
         return Ok(rs);
     }
-    
+
     // If it's a directory, recursively visit all files
     visit(dir, &excl, &mut |path| {
         let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
@@ -833,7 +847,8 @@ pub fn semgrep_to_regex(pattern: &str, mv: &HashMap<String, String>) -> String {
             let r = anchored.trim_start_matches('^').trim_end_matches('$');
             p.push_str(&format!("({r})"));
         } else {
-            p.push_str("[^\n]*?");
+            // Wrap fallback in a capture group so focus metavariables can be extracted later.
+            p.push_str("([^\n]*?)");
         }
         last = m.end();
     }
@@ -871,7 +886,8 @@ pub fn semgrep_to_regex_exact(pattern: &str, mv: &HashMap<String, String>) -> St
             let r = anchored.trim_start_matches('^').trim_end_matches('$');
             p.push_str(&format!("({r})"));
         } else {
-            p.push_str("[^\n]*?");
+            // Wrap fallback in a capture group so focus metavariables can be extracted later.
+            p.push_str("([^\n]*?)");
         }
         last = m.end();
     }
@@ -902,7 +918,10 @@ fn collect_metavar_regex(
                 .get("metavariable")
                 .and_then(|v| v.as_str())
                 .map(|s| s.trim_start_matches('$').to_string());
-            let re = map.get("regex").and_then(|v| v.as_str()).map(|s| s.to_string());
+            let re = map
+                .get("regex")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
             if let (Some(var), Some(re)) = (var, re) {
                 mv.insert(var, re);
             }
@@ -919,7 +938,9 @@ fn collect_metavar_regex(
             obj.get(&YamlValue::from("metavariable"))
                 .and_then(|v| v.as_str())
                 .map(|s| s.trim_start_matches('$').to_string()),
-            obj.get(&YamlValue::from("regex")).and_then(|v| v.as_str()).map(|s| s.to_string()),
+            obj.get(&YamlValue::from("regex"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
         ) {
             mv.insert(var, re);
         }
@@ -929,6 +950,69 @@ fn collect_metavar_regex(
     } else if let Some(seq) = value.as_sequence() {
         for val in seq {
             collect_metavar_regex(val, mv, focus);
+        }
+    }
+}
+
+fn collect_pattern_literals(node: &YamlValue, out: &mut HashSet<String>) {
+    if let Some(s) = node.as_str() {
+        out.insert(s.to_string());
+        return;
+    }
+    if let Some(map) = node.as_mapping() {
+        if let Some(pat) = map.get("pattern").and_then(|v| v.as_str()) {
+            out.insert(pat.to_string());
+        }
+        if let Some(seq) = map.get("pattern-either").and_then(|v| v.as_sequence()) {
+            for item in seq {
+                collect_pattern_literals(item, out);
+            }
+        }
+        if let Some(seq) = map.get("patterns").and_then(|v| v.as_sequence()) {
+            for item in seq {
+                collect_pattern_literals(item, out);
+            }
+        }
+    } else if let Some(seq) = node.as_sequence() {
+        for item in seq {
+            collect_pattern_literals(item, out);
+        }
+    }
+}
+
+fn collect_metavar_patterns(value: &YamlValue, mv: &mut HashMap<String, Vec<String>>) {
+    if let Some(seq) = value.as_sequence() {
+        for item in seq {
+            collect_metavar_patterns(item, mv);
+        }
+        return;
+    }
+    if let Some(map) = value.as_mapping() {
+        for (k, v) in map {
+            if k.as_str() == Some("metavariable-pattern") {
+                if let Some(inner) = v.as_mapping() {
+                    if let Some(var) = inner.get("metavariable").and_then(|v| v.as_str()) {
+                        let mut acc = HashSet::new();
+                        if let Some(node) = inner.get("pattern") {
+                            collect_pattern_literals(node, &mut acc);
+                        }
+                        if let Some(node) = inner.get("pattern-either") {
+                            collect_pattern_literals(node, &mut acc);
+                        }
+                        if let Some(node) = inner.get("patterns") {
+                            collect_pattern_literals(node, &mut acc);
+                        }
+                        if !acc.is_empty() {
+                            let entry = mv
+                                .entry(var.trim_start_matches('$').to_string())
+                                .or_default();
+                            entry.extend(acc.into_iter());
+                        }
+                    }
+                }
+            } else {
+                collect_metavar_patterns(v, mv);
+            }
         }
     }
 }
@@ -998,27 +1082,6 @@ fn extract_patterns(
                         continue;
                     }
                     "metavariable-pattern" => {
-                        if let Some(map) = v.as_mapping() {
-                            if let Some(pv) = map.get("pattern") {
-                                let k = kind.unwrap_or(PatternKind::Pattern);
-                                extract_patterns(pv, Some(k), out, seen);
-                            }
-                            if let Some(pv) = map.get("patterns") {
-                                extract_patterns(pv, kind, out, seen);
-                            }
-                        } else if let Some(seq) = v.as_sequence() {
-                            for item in seq {
-                                if let Some(map) = item.as_mapping() {
-                                    if let Some(pv) = map.get("pattern") {
-                                        let k = kind.unwrap_or(PatternKind::Pattern);
-                                        extract_patterns(pv, Some(k), out, seen);
-                                    }
-                                    if let Some(pv) = map.get("patterns") {
-                                        extract_patterns(pv, kind, out, seen);
-                                    }
-                                }
-                            }
-                        }
                         continue;
                     }
                     "pattern-either" | "patterns" => {
@@ -1044,21 +1107,43 @@ fn extract_patterns(
 fn compile_taint_patterns(
     arr: &[YamlValue],
     mv: &HashMap<String, String>,
+    focus: Option<&str>,
 ) -> anyhow::Result<TaintPattern> {
+    fn focus_group_index(pattern: &str, focus: Option<&str>) -> Option<usize> {
+        let focus = focus?;
+        let target = focus.trim_start_matches('$');
+        let re = Regex::new(r"\$[A-Za-z_][A-Za-z0-9_]*").expect("valid metavariable regex");
+        let mut idx = 1usize;
+        for m in re.find_iter(pattern) {
+            let name = &pattern[m.start() + 1..m.end()];
+            if name == target {
+                return Some(idx);
+            }
+            idx += 1;
+        }
+        None
+    }
+
     fn handle_entry(
         entry: &YamlValue,
         mv: &HashMap<String, String>,
         pattern: &mut TaintPattern,
+        focus: Option<&str>,
     ) -> anyhow::Result<()> {
         if let Some(p) = entry.get("pattern").and_then(|v| v.as_str()) {
-            for line in p
+            let normalized = p
                 .lines()
                 .map(|l| l.trim())
-                .filter(|l| !l.is_empty() && *l != "...")
-            {
+                .filter(|l| !l.is_empty())
+                .collect::<Vec<_>>()
+                .join("\n");
+            if !normalized.is_empty() {
                 pattern
                     .allow
-                    .push(FancyRegex::new(&semgrep_to_regex_exact(line, mv))?.into());
+                    .push(FancyRegex::new(&semgrep_to_regex_exact(&normalized, mv))?.into());
+                pattern
+                    .allow_focus_groups
+                    .push(focus_group_index(&normalized, focus));
             }
         }
         if let Some(p) = entry.get("pattern-inside").and_then(|v| v.as_str()) {
@@ -1070,6 +1155,9 @@ fn compile_taint_patterns(
                 pattern
                     .inside
                     .push(FancyRegex::new(&semgrep_to_regex_exact(line, mv))?.into());
+                pattern
+                    .inside_focus_groups
+                    .push(focus_group_index(line, focus));
             }
         }
         if let Some(p) = entry.get("pattern-not-inside").and_then(|v| v.as_str()) {
@@ -1094,12 +1182,12 @@ fn compile_taint_patterns(
         }
         if let Some(arr) = entry.get("pattern-either").and_then(|v| v.as_sequence()) {
             for item in arr {
-                handle_entry(item, mv, pattern)?;
+                handle_entry(item, mv, pattern, focus)?;
             }
         }
         if let Some(arr) = entry.get("patterns").and_then(|v| v.as_sequence()) {
             for item in arr {
-                handle_entry(item, mv, pattern)?;
+                handle_entry(item, mv, pattern, focus)?;
             }
         }
         Ok(())
@@ -1107,7 +1195,7 @@ fn compile_taint_patterns(
 
     let mut pattern = TaintPattern::default();
     for item in arr {
-        handle_entry(item, mv, &mut pattern)?;
+        handle_entry(item, mv, &mut pattern, focus)?;
     }
     Ok(pattern)
 }
@@ -1122,7 +1210,11 @@ fn compile_semgrep_rule(
     if !seen.insert(sr.id.clone()) {
         anyhow::bail!("duplicate rule id: {}", sr.id);
     }
-    debug!("Compiling Semgrep rule: {} from file: {}", sr.id, file_path.display());
+    debug!(
+        "Compiling Semgrep rule: {} from file: {}",
+        sr.id,
+        file_path.display()
+    );
     debug!("Rule mode: {:?}", sr.mode);
     let severity: Severity = sr
         .severity
@@ -1137,6 +1229,7 @@ fn compile_semgrep_rule(
         .map(|p| p.to_string_lossy().to_string());
     let mut mv = HashMap::new();
     let mut _focus = sr.focus_metavariable.clone();
+    let mut mv_pattern_map: HashMap<String, Vec<String>> = HashMap::new();
     if let Some(arr) = &sr.metavariable_regex {
         for item in arr {
             mv.insert(
@@ -1147,6 +1240,40 @@ fn compile_semgrep_rule(
     }
     let sr_yaml = serde_yaml::to_value(&sr)?;
     collect_metavar_regex(&sr_yaml, &mut mv, &mut _focus);
+    collect_metavar_patterns(&sr_yaml, &mut mv_pattern_map);
+    if !mv_pattern_map.is_empty() {
+        let empty_mv: HashMap<String, String> = HashMap::new();
+        for (var, patterns) in mv_pattern_map {
+            if mv.contains_key(&var) {
+                continue;
+            }
+            let mut parts = Vec::new();
+            for pat in patterns {
+                let trimmed = pat.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                let regex_src = semgrep_to_regex_exact(trimmed, &empty_mv);
+                let mut core = regex_src
+                    .strip_prefix("(?s)")
+                    .unwrap_or(&regex_src)
+                    .to_string();
+                if core.trim().is_empty() {
+                    continue;
+                }
+                if trimmed.contains("$_") {
+                    core.push_str(r"(?:\[[^\]]*\])*");
+                }
+                parts.push(format!("(?:{core})"));
+            }
+            if parts.is_empty() {
+                continue;
+            }
+            let union = parts.join("|");
+            let final_re = format!("(?s)(?:{})", union);
+            mv.insert(var, final_re);
+        }
+    }
     let mut patterns = Vec::new();
     let mut seen_patterns = HashSet::new();
     extract_patterns(&sr_yaml, None, &mut patterns, &mut seen_patterns);
@@ -1154,13 +1281,13 @@ fn compile_semgrep_rule(
     if let Some(arr) = sr.pattern_sources.clone() {
         for src in arr {
             if let Some(seq) = src.get("patterns").and_then(|v| v.as_sequence()) {
-                let mut tp = compile_taint_patterns(seq, &mv)?;
+                let mut tp = compile_taint_patterns(seq, &mv, _focus.as_deref())?;
                 tp.focus = _focus.clone();
                 sources.push(tp);
             } else if src.get("pattern-either").is_some() || src.get("pattern").is_some() {
                 // Handle single pattern or pattern-either directly
                 let single_item = vec![src];
-                let mut tp = compile_taint_patterns(&single_item, &mv)?;
+                let mut tp = compile_taint_patterns(&single_item, &mv, _focus.as_deref())?;
                 tp.focus = _focus.clone();
                 sources.push(tp);
             }
@@ -1171,13 +1298,13 @@ fn compile_semgrep_rule(
     if let Some(arr) = sr.pattern_sanitizers.clone() {
         for san in arr {
             if let Some(seq) = san.get("patterns").and_then(|v| v.as_sequence()) {
-                let mut tp = compile_taint_patterns(seq, &mv)?;
+                let mut tp = compile_taint_patterns(seq, &mv, _focus.as_deref())?;
                 tp.focus = _focus.clone();
                 sanitizers.push(tp);
             } else if san.get("pattern-either").is_some() || san.get("pattern").is_some() {
                 // Handle single pattern or pattern-either directly
                 let single_item = vec![san];
-                let mut tp = compile_taint_patterns(&single_item, &mv)?;
+                let mut tp = compile_taint_patterns(&single_item, &mv, _focus.as_deref())?;
                 tp.focus = _focus.clone();
                 sanitizers.push(tp);
             }
@@ -1188,11 +1315,15 @@ fn compile_semgrep_rule(
     if let Some(arr) = sr.pattern_sinks.clone() {
         for snk in arr {
             if let Some(seq) = snk.get("patterns").and_then(|v| v.as_sequence()) {
-                sinks.push(compile_taint_patterns(seq, &mv)?);
+                sinks.push(compile_taint_patterns(seq, &mv, _focus.as_deref())?);
             } else if snk.get("pattern-either").is_some() || snk.get("pattern").is_some() {
                 // Handle single pattern or pattern-either directly
                 let single_item = vec![snk];
-                sinks.push(compile_taint_patterns(&single_item, &mv)?);
+                sinks.push(compile_taint_patterns(
+                    &single_item,
+                    &mv,
+                    _focus.as_deref(),
+                )?);
             }
         }
     }
@@ -1201,17 +1332,25 @@ fn compile_semgrep_rule(
     if let Some(arr) = sr.pattern_reclass.clone() {
         for rc in arr {
             if let Some(seq) = rc.get("patterns").and_then(|v| v.as_sequence()) {
-                reclass.push(compile_taint_patterns(seq, &mv)?);
+                reclass.push(compile_taint_patterns(seq, &mv, _focus.as_deref())?);
             } else if rc.get("pattern-either").is_some() || rc.get("pattern").is_some() {
                 // Handle single pattern or pattern-either directly
                 let single_item = vec![rc];
-                reclass.push(compile_taint_patterns(&single_item, &mv)?);
+                reclass.push(compile_taint_patterns(
+                    &single_item,
+                    &mv,
+                    _focus.as_deref(),
+                )?);
             }
         }
     }
 
     if !sources.is_empty() || !sinks.is_empty() {
-        debug!("Creating TaintRule with {} sources and {} sinks", sources.len(), sinks.len());
+        debug!(
+            "Creating TaintRule with {} sources and {} sinks",
+            sources.len(),
+            sinks.len()
+        );
         rs.rules.push(CompiledRule {
             id: sr.id,
             severity,
@@ -1245,13 +1384,15 @@ fn compile_semgrep_rule(
         for (kind, pat) in patterns {
             match kind {
                 PatternKind::Pattern => {
-                    for line in pat
+                    let normalized = pat
                         .lines()
                         .map(|l| l.trim())
-                        .filter(|l| !l.is_empty() && *l != "...")
-                    {
-                        let re_str = semgrep_to_regex_exact(line, &mv);
-                        allow.push((FancyRegex::new(&re_str)?.into(), line.to_string()));
+                        .filter(|l| !l.is_empty())
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    if !normalized.is_empty() {
+                        let re_str = semgrep_to_regex_exact(&normalized, &mv);
+                        allow.push((FancyRegex::new(&re_str)?.into(), normalized));
                     }
                 }
                 PatternKind::Inside => {
@@ -1298,7 +1439,10 @@ fn compile_semgrep_rule(
                     .collect();
                 let joined = cleaned.join(")|(?:");
                 let big = format!("(?s)(?:{})", joined);
-                Some(FancyRegex::new(&big)?.into())} else { None };
+                Some(FancyRegex::new(&big)?.into())
+            } else {
+                None
+            };
             rs.rules.push(CompiledRule {
                 id: sr.id,
                 severity,
@@ -1398,7 +1542,6 @@ mod tests {
         let err = load_rules(dir.path()).unwrap_err();
         assert!(err.to_string().contains("WASM"));
     }
-
     #[test]
     fn loads_ast_query_rule() {
         let dir = tempdir().unwrap();
@@ -1660,7 +1803,8 @@ mod tests {
         assert_eq!(rs.rules.len(), 1);
         match &rs.rules[0].matcher {
             MatcherKind::TextRegexMulti { allow, .. } => {
-                assert!(allow.iter().any(|(re, _)| re.is_match("release")));
+                let snippet = "free(ptr);\nlog(ptr);\nrelease(ptr);";
+                assert!(allow.iter().any(|(re, _)| re.is_match(snippet)));
             }
             _ => panic!("expected TextRegexMulti"),
         }
