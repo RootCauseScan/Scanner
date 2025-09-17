@@ -2099,7 +2099,7 @@ fn eval_rule_impl(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
             fn extract_sink_variables(text: &str) -> Vec<String> {
                 let mut vars = Vec::new();
                 let mut chars = text.chars().peekable();
-                
+
                 while let Some(ch) = chars.next() {
                     if ch == '$' {
                         let mut var_name = String::new();
@@ -2117,15 +2117,15 @@ fn eval_rule_impl(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
                 }
                 vars
             }
-            
+
             // Helper function to check if any variables in sink are unsanitized
             fn has_unsanitized_sink_vars(file: &FileIR, sink_text: &str) -> bool {
                 let sink_vars = extract_sink_variables(sink_text);
-                sink_vars.iter().any(|var| {
-                    file.symbols.get(var).map(|s| !s.sanitized).unwrap_or(true)
-                })
+                sink_vars
+                    .iter()
+                    .any(|var| file.symbols.get(var).map(|s| !s.sanitized).unwrap_or(true))
             }
-            
+
             let mut findings = Vec::new();
             for (sym, _, _) in &source_syms {
                 for (sink_text, line, column, excerpt) in &sink_hits {
@@ -2137,7 +2137,7 @@ fn eval_rule_impl(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
                         );
                         continue;
                     }
-                    
+
                     if find_taint_path(file, sym, sink_text).is_some() {
                         let id = blake3::hash(
                             format!("{}:{}:{}:{}", rule.id, canonical, line, column).as_bytes(),

@@ -13,13 +13,25 @@ static CATALOGS: OnceLock<RwLock<HashMap<String, Catalog>>> = OnceLock::new();
 fn catalogs() -> &'static RwLock<HashMap<String, Catalog>> {
     CATALOGS.get_or_init(|| {
         let mut map = HashMap::new();
-        
+
         // Load catalogs from language-specific modules
-        map.insert("python".to_string(), crate::languages::python::catalog::load_catalog());
-        map.insert("rust".to_string(), crate::languages::rust::catalog::load_catalog());
-        map.insert("java".to_string(), crate::languages::java::catalog::load_catalog());
-        map.insert("php".to_string(), crate::languages::php::catalog::load_catalog());
-        
+        map.insert(
+            "python".to_string(),
+            crate::languages::python::catalog::load_catalog(),
+        );
+        map.insert(
+            "rust".to_string(),
+            crate::languages::rust::catalog::load_catalog(),
+        );
+        map.insert(
+            "java".to_string(),
+            crate::languages::java::catalog::load_catalog(),
+        );
+        map.insert(
+            "php".to_string(),
+            crate::languages::php::catalog::load_catalog(),
+        );
+
         RwLock::new(map)
     })
 }

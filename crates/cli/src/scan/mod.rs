@@ -381,7 +381,7 @@ maintainer = "RootCause Security Team <contact@rootcause.dev>"
             }
         }
     }
-    
+
     // If we're loading a single file, don't load any additional rules
     if !args.rules.is_dir() {
         // Reset and only load the specified file
