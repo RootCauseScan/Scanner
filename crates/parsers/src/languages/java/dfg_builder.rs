@@ -35,6 +35,12 @@ fn find_symbol<'a>(name: &str, symbols: &'a HashMap<String, Symbol>) -> Option<&
     }
 }
 
+fn node_text_trimmed(node: Node, src: &str) -> Option<String> {
+    node.utf8_text(src.as_bytes())
+        .ok()
+        .map(|s| s.trim().to_string())
+}
+
 fn gather_ids(node: Node, src: &str, out: &mut Vec<String>) {
     match node.kind() {
         "identifier" => {
@@ -91,6 +97,9 @@ fn gather_ids(node: Node, src: &str, out: &mut Vec<String>) {
             return;
         }
         "method_invocation" => {
+            let receiver_text = node
+                .child_by_field_name("object")
+                .and_then(|obj| node_text_trimmed(obj, src));
             if let Some(obj) = node.child_by_field_name("object") {
                 if obj.kind() == "identifier" {
                     if let Ok(id) = obj.utf8_text(src.as_bytes()) {
@@ -100,11 +109,30 @@ fn gather_ids(node: Node, src: &str, out: &mut Vec<String>) {
                     gather_ids(obj, src, out);
                 }
             }
+            let mut arg_nodes: Vec<Node> = Vec::new();
             if let Some(args) = node
                 .child_by_field_name("arguments")
                 .or_else(|| node.child_by_field_name("argument_list"))
             {
-                gather_ids(args, src, out);
+                let mut cursor = args.walk();
+                for arg in args.children(&mut cursor).filter(|n| n.is_named()) {
+                    arg_nodes.push(arg);
+                    gather_ids(arg, src, out);
+                }
+            }
+            if let (Some(obj), Some(method)) = (
+                receiver_text,
+                node.child_by_field_name("name")
+                    .and_then(|n| node_text_trimmed(n, src)),
+            ) {
+                let is_keyed = matches!(method.as_str(), "put" | "get" | "add" | "set" | "remove");
+                if is_keyed {
+                    if let Some(first) = arg_nodes.first() {
+                        if let Some(key) = node_text_trimmed(*first, src) {
+                            out.push(format!("{obj}[{key}]"));
+                        }
+                    }
+                }
             }
             return;
         }
@@ -351,6 +379,7 @@ fn build_dfg(
                                 if val.kind() != "lambda_expression"
                                     && val.kind() != "method_reference"
                                 {
+                                    let mut call_sanitizer = false;
                                     if let Some(call) = extract_call_path(val, src) {
                                         if resolve_import(&call, imports, wildcards)
                                             .into_iter()
@@ -364,9 +393,13 @@ fn build_dfg(
                                             })
                                         {
                                             sanitized = true;
+                                            call_sanitizer = true;
                                         }
                                         if let Some(args) = val.child_by_field_name("arguments") {
                                             gather_ids(args, src, &mut ids);
+                                        }
+                                        if !call_sanitizer {
+                                            gather_ids(val, src, &mut ids);
                                         }
                                     } else {
                                         gather_ids(val, src, &mut ids);
@@ -440,6 +473,7 @@ fn build_dfg(
                     if let Some(right) = node.child_by_field_name("right") {
                         if right.kind() != "lambda_expression" && right.kind() != "method_reference"
                         {
+                            let mut call_sanitizer = false;
                             if let Some(call) = extract_call_path(right, src) {
                                 if resolve_import(&call, imports, wildcards)
                                     .into_iter()
@@ -453,9 +487,13 @@ fn build_dfg(
                                     })
                                 {
                                     sanitized = true;
+                                    call_sanitizer = true;
                                 }
                                 if let Some(args) = right.child_by_field_name("arguments") {
                                     gather_ids(args, src, &mut ids);
+                                }
+                                if !call_sanitizer {
+                                    gather_ids(right, src, &mut ids);
                                 }
                             } else {
                                 gather_ids(right, src, &mut ids);
@@ -729,6 +767,182 @@ fn build_dfg(
             } else {
                 branch_states.push(before.clone());
             }
+            merge_states(fir, branch_states);
+            return;
+        }
+        "try_statement" => {
+            // Model try/catch/finally blocks as branches so taint merges conservatively.
+            if let Some(resources) = node
+                .child_by_field_name("resource_specification")
+                .or_else(|| node.child_by_field_name("resources"))
+            {
+                build_dfg(
+                    resources,
+                    src,
+                    fir,
+                    imports,
+                    wildcards,
+                    current_fn,
+                    fn_ids,
+                    fn_params,
+                    fn_returns,
+                    call_args,
+                    branch_stack,
+                    branch_counter,
+                );
+            } else {
+                let mut res_cursor = node.walk();
+                for child in node.children(&mut res_cursor) {
+                    if child.kind() == "resource_specification" {
+                        build_dfg(
+                            child,
+                            src,
+                            fir,
+                            imports,
+                            wildcards,
+                            current_fn,
+                            fn_ids,
+                            fn_params,
+                            fn_returns,
+                            call_args,
+                            branch_stack,
+                            branch_counter,
+                        );
+                    }
+                }
+            }
+
+            let dfg = fir.dfg.get_or_insert_with(DataFlowGraph::default);
+            let bid = dfg.nodes.len();
+            dfg.nodes.push(DFNode {
+                id: bid,
+                name: "try".to_string(),
+                kind: DFNodeKind::Branch,
+                sanitized: false,
+                branch: branch_stack.last().copied(),
+            });
+
+            let before = fir.symbols.clone();
+            let mut branch_states: Vec<HashMap<String, Symbol>> = Vec::new();
+
+            if let Some(body) = node.child_by_field_name("body") {
+                let id = *branch_counter;
+                *branch_counter += 1;
+                fir.symbols = before.clone();
+                branch_stack.push(id);
+                build_dfg(
+                    body,
+                    src,
+                    fir,
+                    imports,
+                    wildcards,
+                    current_fn,
+                    fn_ids,
+                    fn_params,
+                    fn_returns,
+                    call_args,
+                    branch_stack,
+                    branch_counter,
+                );
+                branch_states.push(fir.symbols.clone());
+                branch_stack.pop();
+            }
+
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                match child.kind() {
+                    "catch_clause" => {
+                        let id = *branch_counter;
+                        *branch_counter += 1;
+                        fir.symbols = before.clone();
+                        branch_stack.push(id);
+                        if let Some(param) = child.child_by_field_name("parameter") {
+                            build_dfg(
+                                param,
+                                src,
+                                fir,
+                                imports,
+                                wildcards,
+                                current_fn,
+                                fn_ids,
+                                fn_params,
+                                fn_returns,
+                                call_args,
+                                branch_stack,
+                                branch_counter,
+                            );
+                        }
+                        let mut body = child.child_by_field_name("body");
+                        if body.is_none() {
+                            let mut inner = child.walk();
+                            for part in child.children(&mut inner) {
+                                if part.kind() == "block" {
+                                    body = Some(part);
+                                    break;
+                                }
+                            }
+                        }
+                        if let Some(block) = body {
+                            build_dfg(
+                                block,
+                                src,
+                                fir,
+                                imports,
+                                wildcards,
+                                current_fn,
+                                fn_ids,
+                                fn_params,
+                                fn_returns,
+                                call_args,
+                                branch_stack,
+                                branch_counter,
+                            );
+                        }
+                        branch_states.push(fir.symbols.clone());
+                        branch_stack.pop();
+                    }
+                    "finally_clause" => {
+                        let id = *branch_counter;
+                        *branch_counter += 1;
+                        fir.symbols = before.clone();
+                        branch_stack.push(id);
+                        let mut body = child.child_by_field_name("body");
+                        if body.is_none() {
+                            let mut inner = child.walk();
+                            for part in child.children(&mut inner) {
+                                if part.kind() == "block" {
+                                    body = Some(part);
+                                    break;
+                                }
+                            }
+                        }
+                        if let Some(block) = body {
+                            build_dfg(
+                                block,
+                                src,
+                                fir,
+                                imports,
+                                wildcards,
+                                current_fn,
+                                fn_ids,
+                                fn_params,
+                                fn_returns,
+                                call_args,
+                                branch_stack,
+                                branch_counter,
+                            );
+                        }
+                        branch_states.push(fir.symbols.clone());
+                        branch_stack.pop();
+                    }
+                    _ => {}
+                }
+            }
+
+            if branch_states.is_empty() {
+                branch_states.push(before);
+            }
+
             merge_states(fir, branch_states);
             return;
         }
@@ -1126,45 +1340,210 @@ fn build_dfg(
                     }
                 }
             }
+
+            let receiver_name = node
+                .child_by_field_name("object")
+                .and_then(|obj| node_text_trimmed(obj, src));
+            let method_name = node
+                .child_by_field_name("name")
+                .and_then(|n| node_text_trimmed(n, src));
+
+            let mut arg_nodes: Vec<Node> = Vec::new();
             if let Some(args) = node.child_by_field_name("arguments") {
                 let mut cursor = args.walk();
-                for (idx, arg) in args
-                    .children(&mut cursor)
-                    .filter(|n| n.is_named())
-                    .enumerate()
-                {
-                    if arg.kind() == "lambda_expression" || arg.kind() == "method_reference" {
-                        continue;
+                for arg in args.children(&mut cursor).filter(|n| n.is_named()) {
+                    arg_nodes.push(arg);
+                }
+            }
+
+            if let Some(obj_node) = node.child_by_field_name("object") {
+                let mut vars = Vec::new();
+                gather_ids(obj_node, src, &mut vars);
+                for var in vars {
+                    let canonical = resolve_alias(&var, &fir.symbols);
+                    let sanitized = find_symbol(&canonical, &fir.symbols)
+                        .map(|s| s.sanitized)
+                        .unwrap_or(false);
+                    let dfg = fir.dfg.get_or_insert_with(DataFlowGraph::default);
+                    let id = dfg.nodes.len();
+                    dfg.nodes.push(DFNode {
+                        id,
+                        name: var.to_string(),
+                        kind: DFNodeKind::Use,
+                        sanitized,
+                        branch: branch_stack.last().copied(),
+                    });
+                    if let Some(def_id) = find_symbol(&var, &fir.symbols).and_then(|s| s.def) {
+                        dfg.edges.push((def_id, id));
+                    } else if let Some(def_id) =
+                        find_symbol(&canonical, &fir.symbols).and_then(|s| s.def)
+                    {
+                        dfg.edges.push((def_id, id));
                     }
-                    let mut vars = Vec::new();
-                    gather_ids(arg, src, &mut vars);
-                    for var in vars {
-                        let canonical = resolve_alias(&var, &fir.symbols);
-                        let sanitized = find_symbol(&canonical, &fir.symbols)
-                            .map(|s| s.sanitized)
-                            .unwrap_or(false);
-                        let dfg = fir.dfg.get_or_insert_with(DataFlowGraph::default);
-                        let id = dfg.nodes.len();
-                        dfg.nodes.push(DFNode {
-                            id,
-                            name: var.to_string(),
-                            kind: DFNodeKind::Use,
-                            sanitized,
-                            branch: branch_stack.last().copied(),
-                        });
-                        if let Some(def_id) = find_symbol(&var, &fir.symbols).and_then(|s| s.def) {
-                            dfg.edges.push((def_id, id));
-                            if let Some(cid) = callee {
-                                call_args.push((def_id, cid, idx));
-                            }
-                        } else if let Some(def_id) =
-                            find_symbol(&canonical, &fir.symbols).and_then(|s| s.def)
-                        {
-                            dfg.edges.push((def_id, id));
-                            if let Some(cid) = callee {
-                                call_args.push((def_id, cid, idx));
+                }
+            }
+
+            for (idx, arg) in arg_nodes.iter().enumerate() {
+                if arg.kind() == "lambda_expression" || arg.kind() == "method_reference" {
+                    continue;
+                }
+                let mut vars = Vec::new();
+                gather_ids(*arg, src, &mut vars);
+                for var in vars {
+                    let canonical = resolve_alias(&var, &fir.symbols);
+                    let sanitized = find_symbol(&canonical, &fir.symbols)
+                        .map(|s| s.sanitized)
+                        .unwrap_or(false);
+                    let dfg = fir.dfg.get_or_insert_with(DataFlowGraph::default);
+                    let id = dfg.nodes.len();
+                    dfg.nodes.push(DFNode {
+                        id,
+                        name: var.to_string(),
+                        kind: DFNodeKind::Use,
+                        sanitized,
+                        branch: branch_stack.last().copied(),
+                    });
+                    if let Some(def_id) = find_symbol(&var, &fir.symbols).and_then(|s| s.def) {
+                        dfg.edges.push((def_id, id));
+                        if let Some(cid) = callee {
+                            call_args.push((def_id, cid, idx));
+                        }
+                    } else if let Some(def_id) =
+                        find_symbol(&canonical, &fir.symbols).and_then(|s| s.def)
+                    {
+                        dfg.edges.push((def_id, id));
+                        if let Some(cid) = callee {
+                            call_args.push((def_id, cid, idx));
+                        }
+                    }
+                }
+            }
+
+            let mut field_name: Option<String> = None;
+            let mut value_index: Option<usize> = None;
+            if let (Some(receiver), Some(method)) = (receiver_name.as_ref(), method_name.as_ref()) {
+                match method.as_str() {
+                    "put" | "replace" | "set" => {
+                        if let Some(node) = arg_nodes.get(0) {
+                            if let Some(key) = node_text_trimmed(*node, src) {
+                                field_name = Some(format!("{receiver}[{key}]"));
+                                value_index = Some(1);
                             }
                         }
+                    }
+                    "add" => {
+                        if arg_nodes.len() >= 2 {
+                            if let Some(node) = arg_nodes.get(0) {
+                                if let Some(key) = node_text_trimmed(*node, src) {
+                                    field_name = Some(format!("{receiver}[{key}]"));
+                                    value_index = Some(1);
+                                }
+                            }
+                        }
+                    }
+                    "get" | "remove" => {
+                        if let Some(node) = arg_nodes.get(0) {
+                            if let Some(key) = node_text_trimmed(*node, src) {
+                                field_name = Some(format!("{receiver}[{key}]"));
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            if let (Some(field), Some(val_idx)) = (field_name.clone(), value_index) {
+                if let Some(value_node) = arg_nodes.get(val_idx) {
+                    if value_node.kind() != "lambda_expression"
+                        && value_node.kind() != "method_reference"
+                    {
+                        let mut value_ids = Vec::new();
+                        let mut sanitized_value = false;
+                        if let Some(call) = extract_call_path(*value_node, src) {
+                            if resolve_import(&call, imports, wildcards)
+                                .into_iter()
+                                .chain(std::iter::once(call.clone()))
+                                .any(|f| {
+                                    catalog_module::is_sanitizer("java", &f)
+                                        || matches!(
+                                            fir.symbol_types.get(&f),
+                                            Some(SymbolKind::Sanitizer)
+                                        )
+                                })
+                            {
+                                sanitized_value = true;
+                            }
+                            if let Some(args) = value_node.child_by_field_name("arguments") {
+                                gather_ids(args, src, &mut value_ids);
+                            }
+                        } else {
+                            gather_ids(*value_node, src, &mut value_ids);
+                        }
+
+                        let canonical_sources: Vec<String> = value_ids
+                            .iter()
+                            .map(|name| resolve_alias(name, &fir.symbols))
+                            .collect();
+                        if canonical_sources.iter().any(|canonical| {
+                            find_symbol(canonical, &fir.symbols)
+                                .map(|s| s.sanitized)
+                                .unwrap_or(false)
+                        }) {
+                            sanitized_value = true;
+                        }
+
+                        let dfg = fir.dfg.get_or_insert_with(DataFlowGraph::default);
+                        let def_id = dfg.nodes.len();
+                        dfg.nodes.push(DFNode {
+                            id: def_id,
+                            name: field.clone(),
+                            kind: DFNodeKind::Def,
+                            sanitized: sanitized_value,
+                            branch: branch_stack.last().copied(),
+                        });
+
+                        {
+                            let entry =
+                                fir.symbols.entry(field.clone()).or_insert_with(|| Symbol {
+                                    name: field.clone(),
+                                    sanitized: false,
+                                    def: None,
+                                    alias_of: None,
+                                });
+                            entry.def = Some(def_id);
+                            entry.alias_of = None;
+                            entry.sanitized = sanitized_value;
+                        }
+
+                        for canonical in canonical_sources {
+                            if let Some(def_src) =
+                                find_symbol(&canonical, &fir.symbols).and_then(|s| s.def)
+                            {
+                                dfg.edges.push((def_src, def_id));
+                            }
+                        }
+                    }
+                }
+            }
+
+            if let (Some(field), Some(method)) = (field_name, method_name) {
+                if matches!(method.as_str(), "get" | "remove") {
+                    let canonical = resolve_alias(&field, &fir.symbols);
+                    let sanitized = find_symbol(&canonical, &fir.symbols)
+                        .map(|s| s.sanitized)
+                        .unwrap_or(false);
+                    let dfg = fir.dfg.get_or_insert_with(DataFlowGraph::default);
+                    let use_id = dfg.nodes.len();
+                    dfg.nodes.push(DFNode {
+                        id: use_id,
+                        name: field,
+                        kind: DFNodeKind::Use,
+                        sanitized,
+                        branch: branch_stack.last().copied(),
+                    });
+                    if let Some(def_id) = find_symbol(&canonical, &fir.symbols).and_then(|s| s.def)
+                    {
+                        dfg.edges.push((def_id, use_id));
                     }
                 }
             }

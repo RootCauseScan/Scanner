@@ -2,6 +2,128 @@ use ir::{IRNode, Meta};
 use std::collections::HashMap;
 use tree_sitter::Node;
 
+fn node_text(node: Node, src: &str) -> Option<String> {
+    node.utf8_text(src.as_bytes())
+        .ok()
+        .map(|s| s.trim().to_string())
+}
+
+fn string_literal_value(node: Node, src: &str) -> Option<String> {
+    if node.kind() != "string_literal" {
+        return None;
+    }
+    let raw = node.utf8_text(src.as_bytes()).ok()?.trim().to_string();
+    let bytes = raw.as_bytes();
+    if bytes.len() < 2 {
+        return None;
+    }
+    let quote = bytes[0];
+    if (quote == b'"' && bytes.last() == Some(&b'"'))
+        || (quote == b'\'' && bytes.last() == Some(&b'\''))
+    {
+        let inner = &raw[1..raw.len() - 1];
+        // basic unescape for quotes commonly used in reflection literals.
+        Some(inner.replace("\\\"", "\"").replace("\\'", "'"))
+    } else {
+        Some(raw)
+    }
+}
+
+fn first_string_argument(node: Node, src: &str) -> Option<String> {
+    let args = node.child_by_field_name("arguments")?;
+    let mut cursor = args.walk();
+    for arg in args.children(&mut cursor).filter(|n| n.is_named()) {
+        if let Some(val) = string_literal_value(arg, src) {
+            return Some(val);
+        }
+    }
+    None
+}
+
+fn extract_inline_string(text: &str) -> Option<String> {
+    let chars: Vec<char> = text.chars().collect();
+    let mut idx = 0;
+    while idx < chars.len() {
+        let ch = chars[idx];
+        if ch == '"' || ch == '\'' {
+            let quote = ch;
+            let mut j = idx + 1;
+            while j < chars.len() {
+                if chars[j] == quote && (j == idx + 1 || chars[j - 1] != '\\') {
+                    let segment: String = chars[idx + 1..j].iter().collect();
+                    return Some(segment.replace("\\\"", "\"").replace("\\'", "'"));
+                }
+                j += 1;
+            }
+            break;
+        }
+        idx += 1;
+    }
+    None
+}
+
+fn reflection_metadata(node: Node, src: &str) -> Option<(&'static str, String)> {
+    let method_name = node
+        .child_by_field_name("name")
+        .and_then(|n| node_text(n, src))?;
+    let object_text = node
+        .child_by_field_name("object")
+        .and_then(|n| node_text(n, src));
+
+    match method_name.as_str() {
+        "forName" => {
+            let object = object_text.as_deref()?;
+            if object != "Class" && !object.ends_with("Class") {
+                return None;
+            }
+            let target = first_string_argument(node, src)
+                .or_else(|| object_text.clone())
+                .unwrap_or_else(|| "unknown".to_string());
+            Some(("for_name", target))
+        }
+        "loadClass" => {
+            let object = object_text.as_deref()?;
+            if !object.contains("ClassLoader") {
+                return None;
+            }
+            let target = first_string_argument(node, src)
+                .or_else(|| object_text.clone())
+                .unwrap_or_else(|| "unknown".to_string());
+            Some(("load_class", target))
+        }
+        "newInstance" => {
+            let object = object_text.as_deref().unwrap_or("unknown");
+            if !object.contains("Constructor")
+                && !object.contains("getConstructor")
+                && !object.contains("getDeclaredConstructor")
+                && object != "Class"
+            {
+                return None;
+            }
+            let target = extract_inline_string(object)
+                .or_else(|| first_string_argument(node, src))
+                .unwrap_or_else(|| object.to_string());
+            Some(("new_instance", target))
+        }
+        "invoke" => {
+            let object = object_text.as_deref().unwrap_or("unknown");
+            let lower = object.to_ascii_lowercase();
+            if !object.contains("Method")
+                && !object.contains("getMethod")
+                && !object.contains("getDeclaredMethod")
+                && !lower.contains("method")
+            {
+                return None;
+            }
+            let target = extract_inline_string(object)
+                .or_else(|| first_string_argument(node, src))
+                .unwrap_or_else(|| object.to_string());
+            Some(("invoke", target))
+        }
+        _ => None,
+    }
+}
+
 fn extract_call_path(node: Node, src: &str) -> Option<String> {
     if node.kind() != "method_invocation" {
         return None;
@@ -146,6 +268,19 @@ pub fn walk_ir(
                         kind: "java".into(),
                         path: format!("call.{full}"),
                         value: serde_json::Value::Null,
+                        meta: Meta {
+                            file: fir.file_path.clone(),
+                            line: pos.row + 1,
+                            column: pos.column + 1,
+                        },
+                    });
+                }
+                if let Some((kind, target)) = reflection_metadata(node, src) {
+                    fir.push(IRNode {
+                        id: 0,
+                        kind: "java".into(),
+                        path: format!("call.reflect.{kind}.target"),
+                        value: serde_json::Value::String(target),
                         meta: Meta {
                             file: fir.file_path.clone(),
                             line: pos.row + 1,

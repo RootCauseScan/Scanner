@@ -167,3 +167,33 @@ class T {
     let sym = fir.symbols.get("data").expect("data symbol");
     assert!(sym.sanitized);
 }
+
+// A try/catch should keep data tainted if any handler leaves it unsafe.
+#[test]
+fn try_catch_preserves_taint_on_unsanitized_handler() {
+    let code = r#"
+class T {
+  void main(String data) {
+    try {
+      data = org.apache.commons.text.StringEscapeUtils.escapeHtml(source());
+    } catch (Exception ex) {
+      data = source();
+    }
+    sink(data);
+  }
+}
+"#;
+    let fir = parse_snippet(code);
+    let sym = fir.symbols.get("data").expect("data symbol");
+    assert!(
+        !sym.sanitized,
+        "data should remain tainted when catch branch reintroduces source"
+    );
+    let dfg = fir.dfg.expect("dfg");
+    assert!(
+        dfg.nodes
+            .iter()
+            .any(|node| matches!(node.kind, DFNodeKind::Branch) && node.name == "try"),
+        "try statement should register a branch node",
+    );
+}
