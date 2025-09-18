@@ -175,12 +175,6 @@ pub fn path_regex_cache_contains(pat: &str) -> bool {
 }
 
 pub fn path_matches(pattern: &str, candidate: &str) -> bool {
-    if !pattern
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || "/._-".contains(c) || c == '*')
-    {
-        return false;
-    }
     let cache =
         PATH_REGEX_CACHE.get_or_init(|| Mutex::new(PathRegexCache::new(PATH_REGEX_CACHE_CAPACITY)));
     let mut cache = cache.lock().expect("path regex cache lock poisoned");
@@ -189,10 +183,11 @@ pub fn path_matches(pattern: &str, candidate: &str) -> bool {
     }
     let mut re = String::from("^");
     for ch in pattern.chars() {
-        if ch == '*' {
-            re.push_str(".*");
-        } else {
-            re.push_str(&regex::escape(&ch.to_string()));
+        match ch {
+            '*' => re.push_str(".*"),
+            '.' => re.push_str("\\."),
+            c if c.is_ascii_alphanumeric() || c == '/' || c == '_' || c == '-' => re.push(c),
+            _ => return false,
         }
     }
     re.push('$');
