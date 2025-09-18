@@ -8,6 +8,7 @@ use loader::{
 };
 pub use loader::{CompiledRule, MatcherKind, RuleSet, Severity, TaintPattern};
 use parsers::ParserMetrics;
+use rayon::prelude::*;
 use rayon::ThreadPoolBuilder;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -615,7 +616,7 @@ fn analyze_files_inner(
         files.len()
     );
     let results: Vec<(String, Vec<Finding>)> = files
-        .iter()
+        .par_iter()
         .map(|(h, f)| {
             debug!("analyze_files_inner: Processing file '{}'", h);
             let findings = analyze_file_inner(f, rules);
