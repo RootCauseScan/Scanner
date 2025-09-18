@@ -12,6 +12,8 @@ use crate::{analyze_files_with_config, EngineConfig, EngineMetrics, Finding};
 struct CacheData {
     files: HashMap<String, String>,
     rules: HashMap<String, String>,
+    #[serde(default)]
+    file_results: HashMap<String, Vec<Finding>>,
 }
 
 /// Stores hashes of files and rules to avoid analysing unchanged entries.
@@ -55,6 +57,16 @@ impl HashCache {
         self.data.files.insert(file.file_path.clone(), h);
     }
 
+    /// Retrieves cached findings for a file, if available.
+    pub fn get_file_results(&self, file: &FileIR) -> Option<&Vec<Finding>> {
+        self.data.file_results.get(&file.file_path)
+    }
+
+    /// Stores the findings associated with a file.
+    pub fn update_file_results(&mut self, file_path: String, findings: Vec<Finding>) {
+        self.data.file_results.insert(file_path, findings);
+    }
+
     /// Checks if the rule set differs from the stored cache.
     ///
     /// Changes in rules invalidate all previously analysed files.
@@ -74,6 +86,8 @@ impl HashCache {
     /// Replaces the stored rule hashes with those from the current set.
     pub fn update_rules(&mut self, rules: &RuleSet) {
         self.data.rules.clear();
+        self.data.files.clear();
+        self.data.file_results.clear();
         for r in &rules.rules {
             let h = hash_rule(r);
             self.data.rules.insert(r.id.clone(), h);
@@ -113,19 +127,48 @@ pub fn analyze_files_cached(
     if rules_changed {
         cache.update_rules(rules);
     }
-    let analyze_files: Vec<FileIR> = if rules_changed {
-        files.to_vec()
+    let mut cached_findings = Vec::new();
+    let mut analyze_files: Vec<FileIR> = Vec::new();
+    if rules_changed {
+        analyze_files = files.to_vec();
     } else {
-        files
-            .iter()
-            .filter(|f| cache.file_changed(f))
-            .cloned()
-            .collect()
-    };
+        for file in files {
+            if cache.file_changed(file) {
+                analyze_files.push(file.clone());
+            } else if let Some(results) = cache.get_file_results(file) {
+                cached_findings.extend(results.clone());
+            }
+        }
+    }
+
     for f in &analyze_files {
         cache.update_file(f);
     }
-    let findings = analyze_files_with_config(&analyze_files, rules, cfg, None, metrics.take());
+
+    let analyzed_paths: Vec<String> = analyze_files.iter().map(|f| f.file_path.clone()).collect();
+    let mut findings = if analyze_files.is_empty() {
+        Vec::new()
+    } else {
+        analyze_files_with_config(&analyze_files, rules, cfg, None, metrics.take())
+    };
+
+    if !analyze_files.is_empty() {
+        let mut grouped: HashMap<String, Vec<Finding>> = HashMap::new();
+        for finding in &findings {
+            let key = finding.file.to_string_lossy().into_owned();
+            grouped.entry(key).or_default().push(finding.clone());
+        }
+        for path in analyzed_paths {
+            let results = grouped.remove(&path).unwrap_or_default();
+            cache.update_file_results(path, results);
+        }
+    }
+
+    if !cached_findings.is_empty() {
+        cached_findings.append(&mut findings);
+        findings = cached_findings;
+    }
+
     cache.save();
     findings
 }

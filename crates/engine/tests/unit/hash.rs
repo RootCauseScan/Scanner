@@ -29,7 +29,7 @@ fn reuses_cache_and_detects_changes() {
     let file1 = mk_file_ir(vec![("k8s", "a", json!("foo"))]);
 
     let mut metrics1 = EngineMetrics::default();
-    analyze_files_cached(
+    let findings1 = analyze_files_cached(
         &[file1.clone()],
         &rules,
         &cache,
@@ -38,9 +38,10 @@ fn reuses_cache_and_detects_changes() {
     );
     assert_eq!(metrics1.file_times_ms.len(), 1);
     assert_eq!(metrics1.rule_times_ms.len(), 1);
+    assert_eq!(findings1.len(), 1);
 
     let mut metrics2 = EngineMetrics::default();
-    analyze_files_cached(
+    let findings2 = analyze_files_cached(
         &[file1.clone()],
         &rules,
         &cache,
@@ -49,11 +50,15 @@ fn reuses_cache_and_detects_changes() {
     );
     assert_eq!(metrics2.file_times_ms.len(), 0);
     assert_eq!(metrics2.rule_times_ms.len(), 0);
+    assert_eq!(findings2.len(), 1);
+    assert_eq!(findings2[0].rule_id, findings1[0].rule_id);
+    assert_eq!(findings2[0].file, findings1[0].file);
+    assert_eq!(findings2[0].line, findings1[0].line);
 
     let mut modified = file1.clone();
     modified.nodes[0].value = json!("bar");
     let mut metrics3 = EngineMetrics::default();
-    analyze_files_cached(
+    let findings3 = analyze_files_cached(
         &[modified],
         &rules,
         &cache,
@@ -61,6 +66,7 @@ fn reuses_cache_and_detects_changes() {
         Some(&mut metrics3),
     );
     assert_eq!(metrics3.file_times_ms.len(), 1);
+    assert!(findings3.is_empty());
 }
 
 #[test]
