@@ -1,0 +1,10 @@
+rules:
+- id: rs.no-unwrap
+  message: Avoid unwrap() on Result/Option
+  severity: MEDIUM
+  patterns:
+    - pattern: .unwrap()
+    - pattern-not: .unwrap_or(...)
+    - pattern-not: .unwrap_or_else(...)
+  languages: [rust]
+

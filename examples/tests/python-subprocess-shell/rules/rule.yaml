@@ -1,0 +1,16 @@
+rules:
+- id: py.subprocess-shell
+  severity: HIGH
+  description: Avoid using shell=True in subprocess calls
+  message: Using shell=True can lead to command injection vulnerabilities
+  category: python
+  patterns:
+    - pattern: subprocess.run(..., shell=True, ...)
+    - pattern: subprocess.call(..., shell=True, ...)
+    - pattern: subprocess.Popen(..., shell=True, ...)
+    - pattern: subprocess.check_output(..., shell=True, ...)
+  remediation: Use shell=False and pass arguments as a list
+  metadata:
+    cwe: ["CWE-78: OS Command Injection"]
+    owasp: ["A03:2021 - Injection"]
+    confidence: HIGH
