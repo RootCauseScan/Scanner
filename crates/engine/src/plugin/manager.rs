@@ -13,8 +13,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
-    Mutex,
+    mpsc, Mutex,
 };
+use std::thread::{self, JoinHandle};
 use tracing::{debug, error, info, trace, warn};
 
 /// Plugin that runs an external process and communicates via JSON-RPC over
@@ -366,10 +367,13 @@ impl PluginManager {
     }
 }
 
+type LineMessage = Result<Option<String>, anyhow::Error>;
+
 struct Worker {
     child: Child,
     stdin: BufWriter<std::process::ChildStdin>,
-    stdout: std::io::Lines<BufReader<std::process::ChildStdout>>,
+    stdout_rx: mpsc::Receiver<LineMessage>,
+    reader_handle: Option<JoinHandle<()>>,
     limits: Limits,
     plugin_name: String,
 }
@@ -405,20 +409,40 @@ impl Worker {
         debug!(pid = child.id(), program = %cmd_path.display(), "Worker process started");
         let stdin = child.stdin.take().context("open stdin")?;
         let stdout = child.stdout.take().context("open stdout")?;
+        let (tx, rx) = mpsc::channel::<LineMessage>();
+        let thread_name = format!("plugin-stdout-{}", plugin_name);
+        let reader_handle = thread::Builder::new()
+            .name(thread_name)
+            .spawn(move || {
+                let mut lines = BufReader::new(stdout).lines();
+                loop {
+                    let message = match lines.next() {
+                        Some(Ok(line)) => Ok(Some(line)),
+                        Some(Err(err)) => Err(anyhow!(err)),
+                        None => Ok(None),
+                    };
+                    let should_break = matches!(&message, Ok(None) | Err(_));
+                    if tx.send(message).is_err() {
+                        break;
+                    }
+                    if should_break {
+                        break;
+                    }
+                }
+            })
+            .with_context(|| format!("spawn stdout reader thread for {}", plugin_name))?;
         Ok(Self {
             child,
             stdin: BufWriter::new(stdin),
-            stdout: BufReader::new(stdout).lines(),
+            stdout_rx: rx,
+            reader_handle: Some(reader_handle),
             limits: limits.clone(),
             plugin_name: plugin_name.to_string(),
         })
     }
 
     fn call<R: DeserializeOwned>(&mut self, method: &str, params: Value) -> Result<R> {
-        use std::{
-            sync::mpsc,
-            time::{Duration, Instant},
-        };
+        use std::time::{Duration, Instant};
 
         let id = NEXT_ID.fetch_add(1, Ordering::SeqCst).to_string();
         let req = json!({
@@ -433,15 +457,6 @@ impl Worker {
 
         let start = Instant::now();
         loop {
-            let (tx, rx) = mpsc::channel();
-            std::thread::scope(|s| {
-                let stdout = &mut self.stdout;
-                s.spawn(move || {
-                    let line = stdout.next().transpose();
-                    let _ = tx.send(line);
-                });
-            });
-
             let line_res = match self.limits.cpu_ms {
                 Some(ms) => {
                     let elapsed = start.elapsed().as_millis() as u64;
@@ -450,7 +465,10 @@ impl Worker {
                         let _ = self.child.wait();
                         return Err(anyhow!(format!("plugin timed out after {} ms", ms)));
                     }
-                    match rx.recv_timeout(Duration::from_millis(ms - elapsed)) {
+                    match self
+                        .stdout_rx
+                        .recv_timeout(Duration::from_millis(ms - elapsed))
+                    {
                         Ok(res) => res,
                         Err(mpsc::RecvTimeoutError::Timeout) => {
                             let _ = self.child.kill();
@@ -462,13 +480,16 @@ impl Worker {
                         }
                     }
                 }
-                None => rx.recv().map_err(|_| anyhow!("plugin closed"))?,
+                None => self
+                    .stdout_rx
+                    .recv()
+                    .map_err(|_| anyhow!("plugin closed"))?,
             };
 
             let line = match line_res {
                 Ok(Some(line)) => line,
                 Ok(None) => return Err(anyhow!("plugin closed")),
-                Err(e) => return Err(anyhow!(e)),
+                Err(e) => return Err(e),
             };
 
             if let Ok(log_call) = serde_json::from_str::<PluginLogCall>(&line) {
@@ -510,6 +531,13 @@ impl Worker {
             warn!(%line, "unexpected plugin message");
         }
     }
+
+    #[cfg(test)]
+    fn reader_thread_id(&self) -> Option<std::thread::ThreadId> {
+        self.reader_handle
+            .as_ref()
+            .map(|handle| handle.thread().id())
+    }
 }
 
 impl Drop for Worker {
@@ -520,7 +548,70 @@ impl Drop for Worker {
         if let Err(err) = self.child.wait() {
             warn!(error = %err, "failed to reap plugin process");
         }
+        if let Some(handle) = self.reader_handle.take() {
+            if let Err(err) = handle.join() {
+                warn!("failed to join plugin stdout reader thread: {:?}", err);
+            }
+        }
     }
 }
 
 static NEXT_ID: AtomicUsize = AtomicUsize::new(1);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::{json, Value};
+    use std::fs;
+    use tempfile::TempDir;
+
+    const ECHO_PY: &str = r#"#!/usr/bin/env python3
+import sys, json
+
+def send(i, result=None):
+    msg = {"jsonrpc": "2.0", "id": i, "result": result or {}}
+    print(json.dumps(msg))
+    sys.stdout.flush()
+
+for line in sys.stdin:
+    req = json.loads(line)
+    mid = req.get("id")
+    method = req.get("method")
+    if method == "plugin.shutdown":
+        send(mid, {"ok": True})
+        break
+    else:
+        send(mid, {"method": method, "params": req.get("params")})
+"#;
+
+    #[test]
+    fn reuses_stdout_thread_across_calls() {
+        let tmp = TempDir::new().unwrap();
+        let script = tmp.path().join("plugin.py");
+        fs::write(&script, ECHO_PY).unwrap();
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = fs::metadata(&script).unwrap().permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(&script, perms).unwrap();
+        }
+
+        let limits = Limits::default();
+        let mut worker = Worker::spawn(&script, &[], tmp.path(), &limits, "echo").unwrap();
+        let reader_thread = worker.reader_thread_id().expect("reader thread");
+
+        for iteration in 0..3 {
+            let response: Value = worker
+                .call("echo", json!({"iteration": iteration}))
+                .unwrap();
+            assert_eq!(response["method"], "echo");
+            assert_eq!(worker.reader_thread_id().unwrap(), reader_thread);
+        }
+
+        let _: Value = worker
+            .call("plugin.shutdown", Value::Null)
+            .expect("shutdown response");
+    }
+}
