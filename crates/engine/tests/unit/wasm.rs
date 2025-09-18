@@ -46,6 +46,7 @@ fn logs_warning_when_wasm_not_found() {
         source_file: None,
         sources: vec![],
         sinks: vec![],
+        languages: vec!["generic".into()],
     };
     let rules = RuleSet { rules: vec![rule] };
     let output = capture_logs(|| warmup_wasm_rules(&rules));
@@ -72,6 +73,7 @@ fn logs_warning_on_invalid_wasm() {
         source_file: None,
         sources: vec![],
         sinks: vec![],
+        languages: vec!["generic".into()],
     };
     let rules = RuleSet { rules: vec![rule] };
     let output = capture_logs(|| warmup_wasm_rules(&rules));

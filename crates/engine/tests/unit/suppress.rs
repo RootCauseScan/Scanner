@@ -19,6 +19,7 @@ fn analysis_uses_in_memory_source() {
         source_file: None,
         sources: vec![],
         sinks: vec![],
+        languages: vec!["generic".into()],
     });
     let file = Builder::new().suffix(".rs").tempfile().unwrap();
     fs::write(file.path(), "// TODO\n").unwrap();
@@ -45,6 +46,7 @@ fn suppression_lines_are_respected() {
         source_file: None,
         sources: vec![],
         sinks: vec![],
+        languages: vec!["generic".into()],
     });
     let file = Builder::new().suffix(".rs").tempfile().unwrap();
     fs::write(file.path(), "// TODO\n// TODO #skip\n").unwrap();

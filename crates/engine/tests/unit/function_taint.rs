@@ -374,7 +374,6 @@ fn accumulates_across_files() {
 }
 
 #[test]
-#[ignore]
 fn resets_between_scans() {
     let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     let f1 = tainted_file();

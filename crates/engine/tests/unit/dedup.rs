@@ -27,6 +27,7 @@ fn deduplicates_duplicate_findings() {
         source_file: None,
         sources: vec![],
         sinks: vec![],
+        languages: vec!["k8s".into()],
     });
     let findings = analyze_files(&[file.clone(), file], &rules, None);
     assert_eq!(findings.len(), 1);
@@ -76,6 +77,7 @@ fn retains_unique_findings() {
         source_file: None,
         sources: vec![],
         sinks: vec![],
+        languages: vec!["k8s".into()],
     });
     let findings = analyze_files(&[f1, f2], &rules, None);
     assert_eq!(findings.len(), 2);

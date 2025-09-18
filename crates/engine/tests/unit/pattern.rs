@@ -47,6 +47,7 @@ fn build_rule() -> CompiledRule {
         source_file: None,
         sources: vec![],
         sinks: vec![],
+        languages: vec!["python".into()],
     }
 }
 

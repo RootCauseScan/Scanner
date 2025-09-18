@@ -16,7 +16,7 @@ This document delves into the internal structures that the engine uses during ru
 ```rust
 pub struct CompiledRule {
     pub id: String,
-    pub severity: String,
+    pub severity: Severity,
     pub category: String,
     pub message: String,
     pub remediation: Option<String>,
@@ -25,6 +25,7 @@ pub struct CompiledRule {
     pub matcher: MatcherKind,
     pub sources: Vec<String>,
     pub sinks: Vec<String>,
+    pub languages: Vec<String>,
 }
 ```
 
@@ -33,7 +34,7 @@ pub struct CompiledRule {
 ```text
 for doc in workspace:
     for rule in ruleset:
-        if rule.matcher.matches(doc):
+        if rule.applies_to(doc.file_type) and rule.matcher.matches(doc):
             report_finding(rule, doc)
 ```
 
@@ -107,4 +108,3 @@ fn matches_taint(pat, snippet):
     && all(context_has(snippet, p) for p in pat.inside)
     && !exists(context_has(snippet, p) for p in pat.not_inside)
 ```
-

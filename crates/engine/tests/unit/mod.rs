@@ -72,6 +72,7 @@ fn text_regex_matches_dockerfile_lines() {
         source_file: None,
         sources: vec![],
         sinks: vec![],
+        languages: vec!["dockerfile".into()],
     });
     let dir = tempdir().unwrap();
     let path = dir.path().join("Dockerfile");
@@ -103,6 +104,7 @@ fn text_regex_ignores_non_root_user() {
         source_file: None,
         sources: vec![],
         sinks: vec![],
+        languages: vec!["dockerfile".into()],
     });
     let dir = tempdir().unwrap();
     let path = dir.path().join("Dockerfile");
@@ -112,6 +114,44 @@ fn text_regex_ignores_non_root_user() {
         .expect("file");
     let findings = analyze_file(&file, &rules);
     assert!(findings.is_empty());
+}
+
+#[test]
+fn rules_are_filtered_by_language() {
+    let mut file = FileIR::new("/tmp/test.rs".into(), "rust".into());
+    file.source = Some("foo".into());
+    let mut rules = RuleSet::default();
+    rules.rules.push(CompiledRule {
+        id: "python.only".into(),
+        severity: Severity::Low,
+        category: "demo".into(),
+        message: "python".into(),
+        remediation: None,
+        fix: None,
+        interfile: false,
+        matcher: MatcherKind::TextRegex(Regex::new("foo").unwrap().into(), String::new()),
+        source_file: None,
+        sources: vec![],
+        sinks: vec![],
+        languages: vec!["python".into()],
+    });
+    rules.rules.push(CompiledRule {
+        id: "generic.rule".into(),
+        severity: Severity::Low,
+        category: "demo".into(),
+        message: "generic".into(),
+        remediation: None,
+        fix: None,
+        interfile: false,
+        matcher: MatcherKind::TextRegex(Regex::new("foo").unwrap().into(), String::new()),
+        source_file: None,
+        sources: vec![],
+        sinks: vec![],
+        languages: vec!["generic".into()],
+    });
+    let findings = analyze_file(&file, &rules);
+    assert_eq!(findings.len(), 1);
+    assert_eq!(findings[0].rule_id, "generic.rule");
 }
 
 #[test]
@@ -132,6 +172,7 @@ fn json_path_eq_matches_yaml_nodes() {
         source_file: None,
         sources: vec![],
         sinks: vec![],
+        languages: vec!["k8s".into()],
     });
     let file = mk_file_ir(vec![(
         "k8s",
@@ -161,6 +202,7 @@ fn json_path_eq_ignores_mismatched_value() {
         source_file: None,
         sources: vec![],
         sinks: vec![],
+        languages: vec!["k8s".into()],
     });
     let file = mk_file_ir(vec![(
         "k8s",
@@ -190,6 +232,7 @@ fn ast_query_matches_ast_nodes() {
         source_file: None,
         sources: vec![],
         sinks: vec![],
+        languages: vec!["rust".into()],
     });
     let mut ast = FileAst::new("/tmp/lib.rs".into(), "rust".into());
     ast.push(AstNode {
@@ -230,6 +273,7 @@ fn ast_query_ignores_non_matching_nodes() {
         source_file: None,
         sources: vec![],
         sinks: vec![],
+        languages: vec!["rust".into()],
     });
     let mut ast = FileAst::new("/tmp/lib.rs".into(), "rust".into());
     ast.push(AstNode {
@@ -295,6 +339,7 @@ fn rule_timeout_yields_no_findings() {
         source_file: None,
         sources: vec![],
         sinks: vec![],
+        languages: vec!["k8s".into()],
     });
     let file = mk_file_ir(vec![(
         "k8s",
@@ -339,6 +384,7 @@ fn file_timeout_yields_no_findings() {
         source_file: None,
         sources: vec![],
         sinks: vec![],
+        languages: vec!["k8s".into()],
     });
 
     let file = mk_file_ir(vec![(
@@ -629,6 +675,7 @@ fn rule_evaluation_is_cached() {
         source_file: None,
         sources: vec![],
         sinks: vec![],
+        languages: vec!["text".into()],
     });
     let mut file = FileIR::new("/tmp/file".into(), "text".into());
     file.source = Some("foo".into());

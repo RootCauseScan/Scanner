@@ -27,6 +27,7 @@ fn pattern_inside_and_not_inside() {
         source_file: None,
         sources: vec![],
         sinks: vec![],
+        languages: vec!["txt".into()],
     });
     let mut file = FileIR::new(path.to_string_lossy().into_owned(), "txt".into());
     file.source = Some(fs::read_to_string(&path).unwrap());
@@ -58,6 +59,7 @@ fn pattern_not_inside_blocks_match() {
         source_file: None,
         sources: vec![],
         sinks: vec![],
+        languages: vec!["txt".into()],
     });
     let mut file = FileIR::new(path.to_string_lossy().into_owned(), "txt".into());
     file.source = Some(fs::read_to_string(&path).unwrap());
@@ -89,6 +91,7 @@ fn pattern_not_inside_method_signature() {
         source_file: None,
         sources: vec![],
         sinks: vec![],
+        languages: vec!["txt".into()],
     });
     let mut file = FileIR::new(path.to_string_lossy().into_owned(), "txt".into());
     file.source = Some(fs::read_to_string(&path).unwrap());
@@ -120,6 +123,7 @@ fn pattern_not_inside_wrong_signature_matches_all() {
         source_file: None,
         sources: vec![],
         sinks: vec![],
+        languages: vec!["txt".into()],
     });
     let mut file = FileIR::new(path.to_string_lossy().into_owned(), "txt".into());
     file.source = Some(fs::read_to_string(&path).unwrap());
@@ -158,6 +162,7 @@ fn pattern_not_inside_method_signature_with_signwith() {
         source_file: None,
         sources: vec![],
         sinks: vec![],
+        languages: vec!["java".into()],
     });
     let mut file = FileIR::new(path.to_string_lossy().into_owned(), "java".into());
     file.source = Some(fs::read_to_string(&path).unwrap());

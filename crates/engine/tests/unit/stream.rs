@@ -27,6 +27,7 @@ fn stream_matches_batch() {
         source_file: None,
         sources: vec![],
         sinks: vec![],
+        languages: vec!["k8s".into()],
     });
     let batch = analyze_files(&[file.clone()], &rules, None);
     let stream = analyze_files_streaming(vec![file], &rules, &EngineConfig::default(), None, None);
@@ -58,6 +59,7 @@ fn stream_no_findings_on_non_matching_input() {
         source_file: None,
         sources: vec![],
         sinks: vec![],
+        languages: vec!["k8s".into()],
     });
     let findings =
         analyze_files_streaming(vec![file], &rules, &EngineConfig::default(), None, None);

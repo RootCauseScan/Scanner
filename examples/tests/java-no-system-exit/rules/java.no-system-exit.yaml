@@ -1,7 +1,0 @@
-rules:
-- id: java.no-system-exit
-  message: Avoid System.exit in application code
-  severity: MEDIUM
-  pattern: System.exit(...);
-  languages: [java]
-

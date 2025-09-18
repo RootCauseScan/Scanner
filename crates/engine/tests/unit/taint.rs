@@ -51,6 +51,7 @@ fn mk_rule() -> RuleSet {
         source_file: None,
         sources: vec![],
         sinks: vec![],
+        languages: vec!["python".into()],
     };
     RuleSet { rules: vec![rule] }
 }

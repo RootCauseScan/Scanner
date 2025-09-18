@@ -1,6 +1,0 @@
-rules:
-- id: regex.aws-access-key
-  message: Possible AWS Access Key exposed
-  severity: HIGH
-  pattern-regex: 'AKIA[0-9A-Z]{16}'
-

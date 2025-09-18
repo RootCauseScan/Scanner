@@ -8,7 +8,7 @@ use loader::{
 };
 pub use loader::{CompiledRule, MatcherKind, RuleSet, Severity, TaintPattern};
 use parsers::ParserMetrics;
-use rayon::{prelude::*, ThreadPoolBuilder};
+use rayon::ThreadPoolBuilder;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
@@ -359,16 +359,6 @@ fn eval_rule(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
     res
 }
 
-fn regex_ranges(source: &str, regs: &[Regex]) -> Vec<(usize, usize)> {
-    let mut ranges = Vec::new();
-    for re in regs {
-        for m in re.find_iter(source) {
-            ranges.push((m.start(), m.end()));
-        }
-    }
-    ranges
-}
-
 fn regex_ranges_any(source: &str, regs: &[AnyRegex]) -> Vec<(usize, usize)> {
     let mut ranges = Vec::new();
     for re in regs {
@@ -583,15 +573,20 @@ fn use_aliases(file: &FileIR) -> Vec<(String, String)> {
 
 fn analyze_file_inner(file: &FileIR, rules: &RuleSet) -> Vec<Finding> {
     init_tokio();
+    let applicable_rules: Vec<&CompiledRule> = rules
+        .rules
+        .iter()
+        .filter(|rule| rule.applies_to(&file.file_type))
+        .collect();
     debug!(
-        "Analyzing file '{}' with {} rules",
+        "Analyzing file '{}' with {} applicable rules (total rules: {})",
         file.file_path,
+        applicable_rules.len(),
         rules.rules.len()
     );
     debug!("Starting rule evaluation for file '{}'", file.file_path);
-    let findings: Vec<Finding> = rules
-        .rules
-        .iter()
+    let findings: Vec<Finding> = applicable_rules
+        .into_iter()
         .flat_map(|r| {
             debug!("Evaluating rule '{}' for file '{}'", r.id, file.file_path);
             let result = eval_rule(file, r);
@@ -854,7 +849,12 @@ fn analyze_file_with_config_inner(
     } else {
         None
     };
-    for r in &rules.rules {
+    let applicable_rules: Vec<&CompiledRule> = rules
+        .rules
+        .iter()
+        .filter(|rule| rule.applies_to(&file.file_type))
+        .collect();
+    for r in applicable_rules {
         if let Some(ft) = cfg.file_timeout {
             if start.elapsed() >= ft {
                 break;
@@ -932,7 +932,6 @@ fn eval_rule_impl(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
         rule_id: rule.id.clone(),
         file: PathBuf::from(&file.file_path),
     });
-    let rule_eval_start = Instant::now();
     #[cfg(test)]
     if rule.id == "slow.rule" {
         std::thread::sleep(Duration::from_millis(100));
@@ -1383,6 +1382,7 @@ fn eval_rule_impl(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
             debug!("TaintRule: Starting sources processing for rule '{}' and file '{}', sources count: {}", rule.id, file.file_path, sources.len());
             let mut source_syms = Vec::new();
             for (tp_idx, tp) in sources.iter().enumerate() {
+                let before_source_symbols = source_syms.len();
                 debug!(
                     "TaintRule: Processing source {} for rule '{}' and file '{}'",
                     tp_idx, rule.id, file.file_path
@@ -1397,10 +1397,15 @@ fn eval_rule_impl(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
                     && !tp.inside.is_empty()
                     && inside_matches.iter().all(|(_, _, sym)| sym.is_none())
                 {
+                    let inside_patterns: Vec<String> =
+                        tp.inside.iter().map(|re| format!("{:?}", re)).collect();
                     debug!(
                         rule = %rule.id,
                         file = %file.file_path,
                         tp_idx,
+                        expected_focus = ?tp.focus,
+                        inside_patterns = ?inside_patterns,
+                        matches = inside_matches.len(),
                         kind = "taint.sources.focus.inside",
                         "Inside patterns matched without capturing focus metavariable"
                     );
@@ -1596,6 +1601,17 @@ fn eval_rule_impl(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
                             }
                         }
                     }
+                }
+                if tp.focus.is_some() && source_syms.len() == before_source_symbols {
+                    debug!(
+                        rule = %rule.id,
+                        file = %file.file_path,
+                        tp_idx,
+                        allow_patterns = tp.allow.len(),
+                        inside_matches = inside_matches.len(),
+                        kind = "taint.sources",
+                        "No source symbols captured from this source pattern"
+                    );
                 }
             }
 
@@ -2121,6 +2137,11 @@ fn eval_rule_impl(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
             // Helper function to check if any variables in sink are unsanitized
             fn has_unsanitized_sink_vars(file: &FileIR, sink_text: &str) -> bool {
                 let sink_vars = extract_sink_variables(sink_text);
+                if sink_vars.is_empty() {
+                    // If we cannot recover metavariables from the sink text, assume
+                    // the sink is relevant so we do not suppress legitimate matches.
+                    return true;
+                }
                 sink_vars
                     .iter()
                     .any(|var| file.symbols.get(var).map(|s| !s.sanitized).unwrap_or(true))

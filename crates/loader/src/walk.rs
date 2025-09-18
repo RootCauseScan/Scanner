@@ -35,10 +35,9 @@ where
             continue;
         }
         if file_type.is_file() {
-            debug!(path = %current.display(), "File discovered");
             callback(&current)?;
         } else if file_type.is_dir() {
-            debug!(path = %current.display(), "Entering directory");
+            debug!(path = %current.display(), "Scanning directory");
             let entries = match fs::read_dir(&current) {
                 Ok(e) => e,
                 Err(e) if e.kind() == io::ErrorKind::PermissionDenied => {

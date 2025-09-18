@@ -93,6 +93,7 @@ fn baseline_filters_by_file_and_line() {
         source_file: None,
         sources: vec![],
         sinks: vec![],
+        languages: vec!["k8s".into()],
     });
     let findings = analyze_files(&[file.clone()], &rules, None);
     assert_eq!(findings.len(), 1);

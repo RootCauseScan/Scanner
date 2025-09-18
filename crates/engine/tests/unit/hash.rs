@@ -23,6 +23,7 @@ fn reuses_cache_and_detects_changes() {
         source_file: None,
         sources: vec![],
         sinks: vec![],
+        languages: vec!["k8s".into()],
     });
 
     let file1 = mk_file_ir(vec![("k8s", "a", json!("foo"))]);
@@ -81,6 +82,7 @@ fn handles_corrupt_cache_file() {
         source_file: None,
         sources: vec![],
         sinks: vec![],
+        languages: vec!["k8s".into()],
     });
 
     let file1 = mk_file_ir(vec![("k8s", "a", json!("foo"))]);

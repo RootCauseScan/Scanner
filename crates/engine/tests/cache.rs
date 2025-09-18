@@ -34,6 +34,7 @@ fn sample_rules() -> RuleSet {
         source_file: None,
         sources: vec![],
         sinks: vec![],
+        languages: vec!["k8s".into()],
     });
     rules
 }

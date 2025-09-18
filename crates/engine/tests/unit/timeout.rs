@@ -24,6 +24,7 @@ fn slow_rule_respects_timeout() {
         source_file: None,
         sources: vec![],
         sinks: vec![],
+        languages: vec!["txt".into()],
     });
 
     let cfg = EngineConfig {
@@ -62,6 +63,7 @@ fn slow_rule_does_not_block_fast_rule() {
         source_file: None,
         sources: vec![],
         sinks: vec![],
+        languages: vec!["txt".into()],
     });
     rules.rules.push(CompiledRule {
         id: "fast.rule".into(),
@@ -75,6 +77,7 @@ fn slow_rule_does_not_block_fast_rule() {
         source_file: None,
         sources: vec![],
         sinks: vec![],
+        languages: vec!["txt".into()],
     });
 
     let cfg = EngineConfig {
@@ -114,6 +117,7 @@ fn analyzes_without_rule_timeout() {
         source_file: None,
         sources: vec![],
         sinks: vec![],
+        languages: vec!["txt".into()],
     });
 
     let cfg = EngineConfig {

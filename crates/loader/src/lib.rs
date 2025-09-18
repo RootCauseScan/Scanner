@@ -4,12 +4,14 @@
 use anyhow::{anyhow, Context};
 use fancy_regex::Regex as FancyRegex;
 use regex::Regex;
+use serde::de::Deserializer;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use serde_yaml::Value as YamlValue;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::str::FromStr;
+use std::sync::OnceLock;
 use std::{
     fs,
     io::Read,
@@ -23,6 +25,182 @@ pub use ast_pattern::{AstPattern, MetaVar, TaintPattern};
 
 mod walk;
 pub use walk::visit;
+
+const GENERIC_LANGUAGE: &str = "generic";
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+enum LanguageField {
+    Single(String),
+    Multiple(Vec<String>),
+}
+
+fn deserialize_languages<'de, D>(deserializer: D) -> Result<Option<Vec<String>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Option::<LanguageField>::deserialize(deserializer)?;
+    Ok(value.map(|lang| match lang {
+        LanguageField::Single(s) => vec![s],
+        LanguageField::Multiple(list) => list,
+    }))
+}
+
+fn normalize_languages(langs: Option<Vec<String>>) -> Vec<String> {
+    let mut normalized = Vec::new();
+    let mut seen = HashSet::new();
+    if let Some(list) = langs {
+        for lang in list {
+            let trimmed = lang.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let lower = trimmed.to_lowercase();
+            if seen.insert(lower.clone()) {
+                normalized.push(lower);
+            }
+        }
+    }
+    if normalized.is_empty() {
+        normalized.push(GENERIC_LANGUAGE.to_string());
+    }
+    normalized
+}
+
+fn log_rule_summary(rule: &CompiledRule) {
+    if !tracing::level_enabled!(tracing::Level::DEBUG) {
+        return;
+    }
+    match &rule.matcher {
+        MatcherKind::TaintRule {
+            sources,
+            sanitizers,
+            reclass,
+            sinks,
+        } => {
+            debug!(
+                rule_id = %rule.id,
+                matcher = "taint",
+                sources = sources.len(),
+                sinks = sinks.len(),
+                sanitizers = sanitizers.len(),
+                reclass = reclass.len(),
+                message = %rule.message,
+                file = ?rule.source_file,
+                "compiled taint rule"
+            );
+            for (idx, tp) in sources.iter().enumerate() {
+                debug!(
+                    rule_id = %rule.id,
+                    kind = "source",
+                    index = idx,
+                allow = tp.allow.len(),
+                allow_focus = ?tp.allow_focus_groups,
+                inside = tp.inside.len(),
+                inside_focus = ?tp.inside_focus_groups,
+                not_inside = tp.not_inside.len(),
+                focus = ?tp.focus,
+                    "taint source pattern"
+                );
+            }
+            for (idx, tp) in sinks.iter().enumerate() {
+                debug!(
+                    rule_id = %rule.id,
+                    kind = "sink",
+                    index = idx,
+                allow = tp.allow.len(),
+                inside = tp.inside.len(),
+                not_inside = tp.not_inside.len(),
+                focus = ?tp.focus,
+                    "taint sink pattern"
+                );
+            }
+        }
+        MatcherKind::TextRegex(_, pat) => {
+            debug!(
+                rule_id = %rule.id,
+                matcher = "text_regex",
+                message = %rule.message,
+                file = ?rule.source_file,
+                pattern = %pat,
+                "compiled text regex rule"
+            );
+        }
+        MatcherKind::TextRegexMulti {
+            allow,
+            deny,
+            inside,
+            not_inside,
+        } => {
+            debug!(
+                rule_id = %rule.id,
+                matcher = "text_regex_multi",
+                message = %rule.message,
+                file = ?rule.source_file,
+                allow = allow.len(),
+                deny = deny.is_some(),
+                inside = inside.len(),
+                not_inside = not_inside.len(),
+                "compiled contextual text rule"
+            );
+        }
+        MatcherKind::JsonPathEq(path, _) => {
+            debug!(
+                rule_id = %rule.id,
+                matcher = "json_eq",
+                message = %rule.message,
+                file = ?rule.source_file,
+                json_path = %path,
+                "compiled JSON equality rule"
+            );
+        }
+        MatcherKind::JsonPathRegex(path, _) => {
+            debug!(
+                rule_id = %rule.id,
+                matcher = "json_regex",
+                message = %rule.message,
+                file = ?rule.source_file,
+                json_path = %path,
+                "compiled JSON regex rule"
+            );
+        }
+        MatcherKind::AstQuery(query) => {
+            debug!(
+                rule_id = %rule.id,
+                matcher = "ast_query",
+                message = %rule.message,
+                file = ?rule.source_file,
+                query_kind = ?query.kind,
+                query_value = ?query.value,
+                "compiled AST query rule"
+            );
+        }
+        MatcherKind::AstPattern(ast) => {
+            debug!(
+                rule_id = %rule.id,
+                matcher = "ast_pattern",
+                message = %rule.message,
+                file = ?rule.source_file,
+                ast_kind = %ast.kind,
+                "compiled AST rule"
+            );
+        }
+        MatcherKind::RegoWasm {
+            wasm_path,
+            entrypoint,
+        } => {
+            debug!(
+                rule_id = %rule.id,
+                matcher = "rego_wasm",
+                message = %rule.message,
+                file = ?rule.source_file,
+                wasm = %wasm_path,
+                entrypoint,
+                "compiled Rego WASM rule"
+            );
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "UPPERCASE")]
@@ -96,6 +274,8 @@ pub struct YamlRule {
     pub remediation: Option<String>,
     pub fix: Option<String>,
     pub examples: Option<Vec<Example>>,
+    #[serde(default, deserialize_with = "deserialize_languages")]
+    pub languages: Option<Vec<String>>,
     #[serde(default)]
     pub options: RuleOptions,
 }
@@ -115,6 +295,8 @@ pub struct JsonRule {
     pub ast_query: Option<AstQueryRule>,
     #[serde(rename = "ast-pattern")]
     pub ast_pattern: Option<AstPattern>,
+    #[serde(default, deserialize_with = "deserialize_languages")]
+    pub languages: Option<Vec<String>>,
     #[serde(default)]
     pub options: RuleOptions,
 }
@@ -173,6 +355,8 @@ pub struct SemgrepRule {
     #[serde(rename = "focus-metavariable")]
     pub focus_metavariable: Option<String>,
     pub fix: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_languages")]
+    pub languages: Option<Vec<String>>,
     #[serde(default)]
     pub options: RuleOptions,
 }
@@ -318,6 +502,22 @@ pub struct CompiledRule {
     pub source_file: Option<String>,
     pub sources: Vec<String>,
     pub sinks: Vec<String>,
+    pub languages: Vec<String>,
+}
+
+impl CompiledRule {
+    pub fn applies_to(&self, file_type: &str) -> bool {
+        let trimmed = file_type.trim();
+        if self.languages.iter().any(|lang| lang == GENERIC_LANGUAGE) {
+            return true;
+        }
+        if trimmed.is_empty() {
+            return false;
+        }
+        self.languages
+            .iter()
+            .any(|lang| lang.eq_ignore_ascii_case(trimmed))
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -515,6 +715,8 @@ struct WasmMeta {
     pub remediation: Option<String>,
     pub fix: Option<String>,
     pub entrypoint: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_languages")]
+    pub languages: Option<Vec<String>>,
 }
 
 const MAX_WASM_BYTES: u64 = 10 * 1024 * 1024; // 10MB limit
@@ -597,6 +799,7 @@ fn compile_wasm_rule(
         remediation: None,
         fix: None,
         entrypoint: None,
+        languages: None,
     });
 
     let rule_id = meta.id;
@@ -613,6 +816,7 @@ fn compile_wasm_rule(
         .strip_prefix(base_dir)
         .ok()
         .map(|p| p.to_string_lossy().to_string());
+    let languages = normalize_languages(meta.languages.clone());
     rs.rules.push(CompiledRule {
         id: rule_id,
         severity,
@@ -628,6 +832,7 @@ fn compile_wasm_rule(
         source_file,
         sources: Vec::new(),
         sinks: Vec::new(),
+        languages,
     });
     Ok(())
 }
@@ -662,6 +867,7 @@ fn compile_yaml_rule(
         .unwrap_or_else(|| yr.description.clone().unwrap_or_default());
     let remediation = yr.remediation.clone();
     let fix = yr.fix.clone();
+    let languages = normalize_languages(yr.languages.clone());
     let source_file = file_path
         .strip_prefix(base_dir)
         .ok()
@@ -682,6 +888,7 @@ fn compile_yaml_rule(
                 source_file: source_file.clone(),
                 sources: Vec::new(),
                 sinks: Vec::new(),
+                languages: languages.clone(),
             });
         }
     }
@@ -703,6 +910,7 @@ fn compile_yaml_rule(
             source_file: source_file.clone(),
             sources: Vec::new(),
             sinks: Vec::new(),
+            languages: languages.clone(),
         });
     }
     if let Some(ap) = yr.ast_pattern {
@@ -718,6 +926,7 @@ fn compile_yaml_rule(
             source_file,
             sources: Vec::new(),
             sinks: Vec::new(),
+            languages,
         });
     }
     Ok(())
@@ -741,6 +950,12 @@ fn compile_json_rule(
         .parse()
         .map_err(|e: String| anyhow!(e))?;
     let description = jr.description.clone().unwrap_or_default();
+    let inferred_languages = jr.languages.clone().or_else(|| {
+        jr.query
+            .as_ref()
+            .and_then(|q| q.r#type.clone().map(|t| vec![t]))
+    });
+    let languages = normalize_languages(inferred_languages);
     let source_file = file_path
         .strip_prefix(base_dir)
         .ok()
@@ -759,6 +974,7 @@ fn compile_json_rule(
                 source_file: source_file.clone(),
                 sources: Vec::new(),
                 sinks: Vec::new(),
+                languages: languages.clone(),
             });
         }
         if let (Some(path), Some(pat)) = (q.path, q.pattern) {
@@ -775,6 +991,7 @@ fn compile_json_rule(
                 source_file: source_file.clone(),
                 sources: Vec::new(),
                 sinks: Vec::new(),
+                languages: languages.clone(),
             });
         }
     }
@@ -796,6 +1013,7 @@ fn compile_json_rule(
             source_file: source_file.clone(),
             sources: Vec::new(),
             sinks: Vec::new(),
+            languages: languages.clone(),
         });
     }
     if let Some(ap) = jr.ast_pattern {
@@ -811,9 +1029,67 @@ fn compile_json_rule(
             source_file,
             sources: Vec::new(),
             sinks: Vec::new(),
+            languages,
         });
     }
     Ok(())
+}
+
+fn normalize_metavariable_regex(raw: &str) -> String {
+    raw.replace("\\A", "^")
+        .replace("\\Z", "$")
+        .replace("\\z", "$")
+}
+
+fn is_pure_lookaround(re_str: &str) -> bool {
+    if !(re_str.starts_with("(?=")
+        || re_str.starts_with("(?!")
+        || re_str.starts_with("(?<=")
+        || re_str.starts_with("(?<!"))
+    {
+        return false;
+    }
+    let bytes = re_str.as_bytes();
+    let mut depth = 0isize;
+    let mut i = 0usize;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b == b'\\' {
+            i += 2;
+            continue;
+        }
+        if b == b'(' {
+            depth += 1;
+        } else if b == b')' {
+            depth -= 1;
+            if depth == 0 {
+                return i == bytes.len() - 1;
+            }
+        }
+        i += 1;
+    }
+    false
+}
+
+fn relax_semgrep_ellipsis(segment: String) -> String {
+    static TRAILING_COMMA: OnceLock<Regex> = OnceLock::new();
+    static LEADING_COMMA: OnceLock<Regex> = OnceLock::new();
+
+    let trailing = TRAILING_COMMA.get_or_init(|| {
+        Regex::new(r"(?P<ell>\.\*\?)(?P<comma>,(?:\\s[+*](?:\\?)?)?)")
+            .expect("valid trailing ellipsis regex")
+    });
+    let leading = LEADING_COMMA.get_or_init(|| {
+        Regex::new(r"(?P<comma>,(?:\\s[+*](?:\\?)?)?)(?P<ell>\.\*\?)")
+            .expect("valid leading ellipsis regex")
+    });
+
+    let segment = trailing
+        .replace_all(&segment, "(?:$ell$comma)?")
+        .into_owned();
+    leading
+        .replace_all(&segment, "(?:$comma$ell)?")
+        .into_owned()
 }
 
 pub fn semgrep_to_regex(pattern: &str, mv: &HashMap<String, String>) -> String {
@@ -837,15 +1113,13 @@ pub fn semgrep_to_regex(pattern: &str, mv: &HashMap<String, String>) -> String {
         p.push_str(&esc(&pattern[last..m.start()]));
         let var = &pattern[m.start() + 1..m.end()];
         if let Some(r) = mv.get(var) {
-            // Support PCRE-style anchors used in some Semgrep rules
-            // by translating \A/\Z/\z to ^/$ which are supported
-            // by the Rust regex engines we use.
-            let anchored = r
-                .replace("\\A", "^")
-                .replace("\\Z", "$")
-                .replace("\\z", "$");
-            let r = anchored.trim_start_matches('^').trim_end_matches('$');
-            p.push_str(&format!("({r})"));
+            let anchored = normalize_metavariable_regex(r);
+            let trimmed = anchored.trim_start_matches('^').trim_end_matches('$');
+            if is_pure_lookaround(trimmed) {
+                p.push_str(&format!("((?:{trimmed})[^\\n]*?)"));
+            } else {
+                p.push_str(&format!("({trimmed})"));
+            }
         } else {
             // Wrap fallback in a capture group so focus metavariables can be extracted later.
             p.push_str("([^\n]*?)");
@@ -855,6 +1129,7 @@ pub fn semgrep_to_regex(pattern: &str, mv: &HashMap<String, String>) -> String {
     p.push_str(&esc(&pattern[last..]));
     p = p.replace("\\.\\.\\.", ".*?");
     p = p.replace(" ", "\\s+");
+    p = relax_semgrep_ellipsis(p);
     format!("(?s).*{p}.*")
 }
 
@@ -879,12 +1154,13 @@ pub fn semgrep_to_regex_exact(pattern: &str, mv: &HashMap<String, String>) -> St
         p.push_str(&esc(&pattern[last..m.start()]));
         let var = &pattern[m.start() + 1..m.end()];
         if let Some(r) = mv.get(var) {
-            let anchored = r
-                .replace("\\A", "^")
-                .replace("\\Z", "$")
-                .replace("\\z", "$");
-            let r = anchored.trim_start_matches('^').trim_end_matches('$');
-            p.push_str(&format!("({r})"));
+            let anchored = normalize_metavariable_regex(r);
+            let trimmed = anchored.trim_start_matches('^').trim_end_matches('$');
+            if is_pure_lookaround(trimmed) {
+                p.push_str(&format!("((?:{trimmed})[^\\n]*?)"));
+            } else {
+                p.push_str(&format!("({trimmed})"));
+            }
         } else {
             // Wrap fallback in a capture group so focus metavariables can be extracted later.
             p.push_str("([^\n]*?)");
@@ -894,6 +1170,7 @@ pub fn semgrep_to_regex_exact(pattern: &str, mv: &HashMap<String, String>) -> St
     p.push_str(&esc(&pattern[last..]));
     p = p.replace("\\.\\.\\.", ".*?");
     p = p.replace(" ", "\\s+");
+    p = relax_semgrep_ellipsis(p);
     format!("(?s){p}")
 }
 
@@ -935,10 +1212,10 @@ fn collect_metavar_regex(
     if let Some(obj) = value.as_mapping() {
         // Also support being called on the metavariable-regex mapping itself
         if let (Some(var), Some(re)) = (
-            obj.get(&YamlValue::from("metavariable"))
+            obj.get(YamlValue::from("metavariable"))
                 .and_then(|v| v.as_str())
                 .map(|s| s.trim_start_matches('$').to_string()),
-            obj.get(&YamlValue::from("regex"))
+            obj.get(YamlValue::from("regex"))
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string()),
         ) {
@@ -1109,7 +1386,65 @@ fn compile_taint_patterns(
     mv: &HashMap<String, String>,
     focus: Option<&str>,
 ) -> anyhow::Result<TaintPattern> {
-    fn focus_group_index(pattern: &str, focus: Option<&str>) -> Option<usize> {
+    fn count_capturing_groups(re_str: &str) -> usize {
+        let bytes = re_str.as_bytes();
+        let mut count = 0usize;
+        let mut i = 0usize;
+        let mut in_class = false;
+        while i < bytes.len() {
+            let b = bytes[i];
+            if b == b'\\' {
+                i += 2;
+                continue;
+            }
+            if b == b'[' {
+                in_class = true;
+                i += 1;
+                continue;
+            }
+            if b == b']' && in_class {
+                in_class = false;
+                i += 1;
+                continue;
+            }
+            if b == b'(' && !in_class {
+                let next = bytes.get(i + 1).copied();
+                if next == Some(b'?') {
+                    match bytes.get(i + 2).copied() {
+                        Some(b':') | Some(b'=') | Some(b'!') | Some(b'>') | Some(b'#') => {}
+                        Some(b'P') => {
+                            if let Some(cmd) = bytes.get(i + 3).copied() {
+                                if cmd == b'<' || cmd == b'\'' {
+                                    count += 1;
+                                }
+                            }
+                        }
+                        Some(b'<') => {
+                            if let Some(cmd) = bytes.get(i + 3).copied() {
+                                if cmd != b'=' && cmd != b'!' {
+                                    count += 1;
+                                }
+                            } else {
+                                count += 1;
+                            }
+                        }
+                        Some(_) => {}
+                        None => {}
+                    }
+                } else {
+                    count += 1;
+                }
+            }
+            i += 1;
+        }
+        count
+    }
+
+    fn focus_group_index(
+        pattern: &str,
+        focus: Option<&str>,
+        mv: &HashMap<String, String>,
+    ) -> Option<usize> {
         let focus = focus?;
         let target = focus.trim_start_matches('$');
         let re = Regex::new(r"\$[A-Za-z_][A-Za-z0-9_]*").expect("valid metavariable regex");
@@ -1119,7 +1454,12 @@ fn compile_taint_patterns(
             if name == target {
                 return Some(idx);
             }
-            idx += 1;
+            let captures = if let Some(re_str) = mv.get(name) {
+                1 + count_capturing_groups(re_str)
+            } else {
+                1
+            };
+            idx += captures;
         }
         None
     }
@@ -1143,7 +1483,7 @@ fn compile_taint_patterns(
                     .push(FancyRegex::new(&semgrep_to_regex_exact(&normalized, mv))?.into());
                 pattern
                     .allow_focus_groups
-                    .push(focus_group_index(&normalized, focus));
+                    .push(focus_group_index(&normalized, focus, mv));
             }
         }
         if let Some(p) = entry.get("pattern-inside").and_then(|v| v.as_str()) {
@@ -1157,7 +1497,7 @@ fn compile_taint_patterns(
                     .push(FancyRegex::new(&semgrep_to_regex_exact(line, mv))?.into());
                 pattern
                     .inside_focus_groups
-                    .push(focus_group_index(line, focus));
+                    .push(focus_group_index(line, focus, mv));
             }
         }
         if let Some(p) = entry.get("pattern-not-inside").and_then(|v| v.as_str()) {
@@ -1223,6 +1563,7 @@ fn compile_semgrep_rule(
         .parse()
         .map_err(|e: String| anyhow!(e))?;
     let message = sr.message.clone().unwrap_or_default();
+    let languages = normalize_languages(sr.languages.clone());
     let source_file = file_path
         .strip_prefix(base_dir)
         .ok()
@@ -1351,7 +1692,7 @@ fn compile_semgrep_rule(
             sources.len(),
             sinks.len()
         );
-        rs.rules.push(CompiledRule {
+        let rule = CompiledRule {
             id: sr.id,
             severity,
             category: "semgrep".into(),
@@ -1368,7 +1709,10 @@ fn compile_semgrep_rule(
             source_file: source_file.clone(),
             sources: Vec::new(),
             sinks: Vec::new(),
-        });
+            languages: languages.clone(),
+        };
+        log_rule_summary(&rule);
+        rs.rules.push(rule);
         return Ok(());
     }
     let use_multi = sr.patterns.is_some()
@@ -1443,7 +1787,7 @@ fn compile_semgrep_rule(
             } else {
                 None
             };
-            rs.rules.push(CompiledRule {
+            let rule = CompiledRule {
                 id: sr.id,
                 severity,
                 category: "semgrep".into(),
@@ -1460,11 +1804,14 @@ fn compile_semgrep_rule(
                 source_file: source_file.clone(),
                 sources: Vec::new(),
                 sinks: Vec::new(),
-            });
+                languages: languages.clone(),
+            };
+            log_rule_summary(&rule);
+            rs.rules.push(rule);
         }
     } else if let Some(p) = sr.pattern {
         let re = FancyRegex::new(&semgrep_to_regex(&p, &mv))?;
-        rs.rules.push(CompiledRule {
+        let rule = CompiledRule {
             id: sr.id,
             severity,
             category: "semgrep".into(),
@@ -1476,10 +1823,13 @@ fn compile_semgrep_rule(
             source_file,
             sources: Vec::new(),
             sinks: Vec::new(),
-        });
+            languages: languages.clone(),
+        };
+        log_rule_summary(&rule);
+        rs.rules.push(rule);
     } else if let Some(pr) = sr.pattern_regex {
         let re = FancyRegex::new(&pr)?;
-        rs.rules.push(CompiledRule {
+        let rule = CompiledRule {
             id: sr.id,
             severity,
             category: "semgrep".into(),
@@ -1491,7 +1841,10 @@ fn compile_semgrep_rule(
             source_file,
             sources: Vec::new(),
             sinks: Vec::new(),
-        });
+            languages,
+        };
+        log_rule_summary(&rule);
+        rs.rules.push(rule);
     }
 
     Ok(())
