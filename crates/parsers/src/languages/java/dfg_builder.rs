@@ -202,7 +202,7 @@ fn stable_node_id(fir: &FileIR, node: Option<Node>, key: &str) -> usize {
     }
 }
 
-fn find_node_mut<'a>(dfg: &'a mut DataFlowGraph, id: usize) -> Option<&'a mut DFNode> {
+fn find_node_mut(dfg: &mut DataFlowGraph, id: usize) -> Option<&mut DFNode> {
     dfg.nodes.iter_mut().find(|n| n.id == id)
 }
 
@@ -1566,7 +1566,7 @@ fn build_dfg(
             if let (Some(receiver), Some(method)) = (receiver_name.as_ref(), method_name.as_ref()) {
                 match method.as_str() {
                     "put" | "replace" | "set" => {
-                        if let Some(node) = arg_nodes.get(0) {
+                        if let Some(node) = arg_nodes.first() {
                             if let Some(key) = node_text_trimmed(*node, src) {
                                 field_name = Some(format!("{receiver}[{key}]"));
                                 value_index = Some(1);
@@ -1575,7 +1575,7 @@ fn build_dfg(
                     }
                     "add" => {
                         if arg_nodes.len() >= 2 {
-                            if let Some(node) = arg_nodes.get(0) {
+                            if let Some(node) = arg_nodes.first() {
                                 if let Some(key) = node_text_trimmed(*node, src) {
                                     field_name = Some(format!("{receiver}[{key}]"));
                                     value_index = Some(1);
@@ -1584,7 +1584,7 @@ fn build_dfg(
                         }
                     }
                     "get" | "remove" => {
-                        if let Some(node) = arg_nodes.get(0) {
+                        if let Some(node) = arg_nodes.first() {
                             if let Some(key) = node_text_trimmed(*node, src) {
                                 field_name = Some(format!("{receiver}[{key}]"));
                             }
@@ -1702,11 +1702,7 @@ fn build_dfg(
         "object_creation_expression" => {
             if let Some(args) = node.child_by_field_name("arguments") {
                 let mut cursor = args.walk();
-                for (_idx, arg) in args
-                    .children(&mut cursor)
-                    .filter(|n| n.is_named())
-                    .enumerate()
-                {
+                for arg in args.children(&mut cursor).filter(|n| n.is_named()) {
                     if arg.kind() == "lambda_expression" || arg.kind() == "method_reference" {
                         continue;
                     }

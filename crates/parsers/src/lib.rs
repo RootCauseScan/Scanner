@@ -68,11 +68,6 @@ pub fn detect_type(path: &Path) -> Option<&'static str> {
             _ => Some("generic"),
         }
     };
-    if let Some(t) = detected {
-        debug!(file = %path.display(), file_type = t, "File type detected");
-    } else {
-        debug!(file = %path.display(), "Unsupported file type");
-    }
     detected
 }
 
@@ -108,8 +103,8 @@ pub fn parse_file(
     suppress_comment: Option<&str>,
     mut metrics: Option<&mut ParserMetrics>,
 ) -> anyhow::Result<Option<FileIR>> {
-    debug!(file = %path.display(), "Detecting file type");
     let Some(ftype) = detect_type(path) else {
+        debug!(file = %path.display(), "Unsupported file type");
         return Ok(None);
     };
     debug!(file = %path.display(), file_type = ftype, "Parsing file");
