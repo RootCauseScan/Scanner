@@ -95,25 +95,25 @@ pub fn find_taint_path(fir: &FileIR, _source: &str, _sink: &str) -> Option<Vec<u
     for (i, node) in dfg.nodes.iter().enumerate() {
         id_to_idx.insert(node.id, i);
     }
-    let mut adj: HashMap<usize, Vec<usize>> = HashMap::new();
-    let mut indegree: HashMap<usize, usize> = HashMap::new();
+    let mut adj: Vec<Vec<usize>> = vec![Vec::new(); dfg.nodes.len()];
+    let mut indegree: Vec<usize> = vec![0; dfg.nodes.len()];
     for &(from, to) in &dfg.edges {
         if let (Some(&f), Some(&t)) = (id_to_idx.get(&from), id_to_idx.get(&to)) {
-            adj.entry(f).or_default().push(t);
-            *indegree.entry(t).or_default() += 1;
+            adj[f].push(t);
+            indegree[t] += 1;
         }
     }
 
     let mut queue: VecDeque<(usize, Vec<usize>)> = VecDeque::new();
-    let mut visited = HashSet::new();
+    let mut visited = vec![false; dfg.nodes.len()];
 
     for (idx, node) in dfg.nodes.iter().enumerate() {
         if matches!(node.kind, ir::DFNodeKind::Def)
-            && indegree.get(&idx).copied().unwrap_or(0) == 0
+            && indegree[idx] == 0
             && is_unsanitized(fir, &node.name)
         {
             queue.push_back((idx, vec![idx]));
-            visited.insert(idx);
+            visited[idx] = true;
         }
     }
 
@@ -123,16 +123,14 @@ pub fn find_taint_path(fir: &FileIR, _source: &str, _sink: &str) -> Option<Vec<u
             return Some(path);
         }
 
-        if let Some(neigh) = adj.get(&current) {
-            for &next in neigh {
-                if visited.contains(&next) || !is_unsanitized(fir, &dfg.nodes[next].name) {
-                    continue;
-                }
-                let mut next_path = path.clone();
-                next_path.push(next);
-                visited.insert(next);
-                queue.push_back((next, next_path));
+        for &next in &adj[current] {
+            if visited[next] || !is_unsanitized(fir, &dfg.nodes[next].name) {
+                continue;
             }
+            let mut next_path = path.clone();
+            next_path.push(next);
+            visited[next] = true;
+            queue.push_back((next, next_path));
         }
     }
     None
