@@ -584,27 +584,19 @@ fn analyze_file_inner(file: &FileIR, rules: &RuleSet) -> Vec<Finding> {
         rules.rules.len()
     );
     debug!("Starting rule evaluation for file '{}'", file.file_path);
-    let findings_per_rule: Vec<Vec<Finding>> = applicable_rules
-        .par_iter()
-        .map(|r| {
-            let rule = *r;
-            debug!(
-                "Evaluating rule '{}' for file '{}'",
-                rule.id, file.file_path
-            );
-            let result = eval_rule(file, rule);
+    let findings: Vec<Finding> = applicable_rules
+        .into_iter()
+        .flat_map(|r| {
+            debug!("Evaluating rule '{}' for file '{}'", r.id, file.file_path);
+            let result = eval_rule(file, r);
             debug!(
                 "Rule '{}' evaluation completed for file '{}', found {} findings",
-                rule.id,
+                r.id,
                 file.file_path,
                 result.len()
             );
             result
         })
-        .collect();
-    let findings: Vec<Finding> = findings_per_rule
-        .into_iter()
-        .flat_map(|rule_findings| rule_findings.into_iter())
         .collect();
     debug!("Rule evaluation completed for file '{}'", file.file_path);
     debug!(
