@@ -18,6 +18,7 @@ serde_yaml = { workspace = true }
 regex = { workspace = true }
 tracing = { workspace = true }
 fancy-regex = { workspace = true }
+pcre2 = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"
