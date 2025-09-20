@@ -1,3 +1,5 @@
+pub mod rule_cache;
+
 use blake3::hash;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

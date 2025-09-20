@@ -3,8 +3,8 @@
 
 use anyhow::{anyhow, Context};
 use fancy_regex::Regex as FancyRegex;
-use regex::Regex;
 use pcre2::bytes::Regex as Pcre2Regex;
+use regex::Regex;
 use serde::de::Deserializer;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
@@ -1078,11 +1078,12 @@ fn compile_regex_with_pcre2_fallback(
     file_path: &str,
 ) -> anyhow::Result<AnyRegex> {
     // Check if pattern contains C# attributes or other complex constructs that need PCRE2
-    let needs_pcre2 = is_pattern_regex || 
-        pattern.contains("[") && pattern.contains("]") ||
-        pattern.contains("(?<") || // Named groups
-        pattern.contains("(?=") || pattern.contains("(?!"); // Lookaheads
-    
+    let needs_pcre2 = is_pattern_regex
+        || pattern.contains("[") && pattern.contains("]")
+        || pattern.contains("(?<") // Named groups
+        || pattern.contains("(?=")
+        || pattern.contains("(?!");
+
     // Try PCRE2 first for pattern-regex, metavariable-regex, or complex patterns
     if needs_pcre2 {
         match Pcre2Regex::new(pattern) {
@@ -1180,26 +1181,24 @@ pub fn relax_semgrep_ellipsis(segment: String) -> String {
     let mut result = trailing
         .replace_all(&segment, "(?:$ell$comma)?")
         .into_owned();
-    result = leading
-        .replace_all(&result, "(?:$comma$ell)?")
-        .into_owned();
-    
+    result = leading.replace_all(&result, "(?:$comma$ell)?").into_owned();
+
     // Fix common issues that can cause "Target of repeat operator is invalid"
     // Remove empty groups that might have quantifiers
     result = result.replace("(?:)?", "");
-    
+
     // Fix malformed parentheses from ellipsis processing
     // This fixes cases like "(?:.*?,\s+\)?{" where there's a stray closing paren
     result = result.replace("(?:.*?,\\s+\\)?{", "(?:.*?,\\s+)?{");
     result = result.replace("(?:.*?,\\s+\\)?}", "(?:.*?,\\s+)?}");
     result = result.replace("(?:.*?,\\s+\\)?(", "(?:.*?,\\s+)?(");
     result = result.replace("(?:.*?,\\s+\\)?)", "(?:.*?,\\s+)?)");
-    
+
     // Fix specific case for dict patterns with tuples
     // This fixes cases like "dict\((?:.*?,\s+)?(([^\n]*?),\s+([^\n]*?)\),\s+(?:.*?,\s+)?(([^\n]*?),\s+([^\n]*?)\)(?:,\s+.*?)?\)"
     // The issue is the final \) that doesn't have a matching opening
     result = result.replace("(?:,\\s+.*?)?\\)", "(?:,\\s+.*?)?");
-    
+
     // Fix missing closing parenthesis for function calls like dict(...)
     // This fixes cases where we have dict\((?:.*?,\s+)?... but missing the final \)
     if result.contains("dict\\(") && !result.contains("dict\\(.*\\)") {
@@ -1212,7 +1211,7 @@ pub fn relax_semgrep_ellipsis(segment: String) -> String {
             }
         }
     }
-    
+
     result
 }
 
@@ -1230,7 +1229,7 @@ pub fn semgrep_to_regex(pattern: &str, mv: &HashMap<String, String>) -> String {
         }
         out
     }
-    
+
     fn handle_string_regex(seg: &str) -> String {
         // Handle Semgrep string regex syntax: "=~/pattern/"
         if let Some(start) = seg.find("=~/") {
@@ -1247,7 +1246,7 @@ pub fn semgrep_to_regex(pattern: &str, mv: &HashMap<String, String>) -> String {
                 }
                 i += 1;
             }
-            
+
             if let Some(end) = end_pos {
                 let regex_part = &seg[search_start..end];
                 let before = &seg[..start];
@@ -1298,7 +1297,7 @@ pub fn semgrep_to_regex_exact(pattern: &str, mv: &HashMap<String, String>) -> St
         }
         out
     }
-    
+
     fn handle_string_regex(seg: &str) -> String {
         // Handle Semgrep string regex syntax: "=~/pattern/"
         if let Some(start) = seg.find("=~/") {
@@ -1315,7 +1314,7 @@ pub fn semgrep_to_regex_exact(pattern: &str, mv: &HashMap<String, String>) -> St
                 }
                 i += 1;
             }
-            
+
             if let Some(end) = end_pos {
                 let regex_part = &seg[search_start..end];
                 let before = &seg[..start];
@@ -1657,7 +1656,12 @@ fn compile_taint_patterns(
                 .join("\n");
             if !normalized.is_empty() {
                 let regex_str = semgrep_to_regex_exact(&normalized, mv);
-                let re = compile_regex_with_pcre2_fallback(&regex_str, false, "taint-pattern", "unknown")?;
+                let re = compile_regex_with_pcre2_fallback(
+                    &regex_str,
+                    false,
+                    "taint-pattern",
+                    "unknown",
+                )?;
                 pattern.allow.push(re);
                 pattern
                     .allow_focus_groups
@@ -1671,7 +1675,12 @@ fn compile_taint_patterns(
                 .filter(|l| !l.is_empty() && *l != "...")
             {
                 let regex_str = semgrep_to_regex_exact(line, mv);
-                let re = compile_regex_with_pcre2_fallback(&regex_str, false, "taint-pattern", "unknown")?;
+                let re = compile_regex_with_pcre2_fallback(
+                    &regex_str,
+                    false,
+                    "taint-pattern",
+                    "unknown",
+                )?;
                 pattern.inside.push(re);
                 pattern
                     .inside_focus_groups
@@ -1685,7 +1694,12 @@ fn compile_taint_patterns(
                 .filter(|l| !l.is_empty() && *l != "...")
             {
                 let regex_str = semgrep_to_regex_exact(line, mv);
-                let re = compile_regex_with_pcre2_fallback(&regex_str, false, "taint-pattern", "unknown")?;
+                let re = compile_regex_with_pcre2_fallback(
+                    &regex_str,
+                    false,
+                    "taint-pattern",
+                    "unknown",
+                )?;
                 pattern.not_inside.push(re);
             }
         }
@@ -1697,7 +1711,8 @@ fn compile_taint_patterns(
                 .collect::<Vec<_>>()
                 .join("\n");
             let regex_str = semgrep_to_regex_exact(&combined, mv);
-            let re = compile_regex_with_pcre2_fallback(&regex_str, false, "taint-pattern", "unknown")?;
+            let re =
+                compile_regex_with_pcre2_fallback(&regex_str, false, "taint-pattern", "unknown")?;
             pattern.deny = Some(re);
         }
         if let Some(arr) = entry.get("pattern-either").and_then(|v| v.as_sequence()) {
@@ -1951,7 +1966,12 @@ fn compile_semgrep_rule(
                     deny_parts.push(semgrep_to_regex_exact(&combined, &mv));
                 }
                 PatternKind::Regex => {
-                    let re = compile_regex_with_pcre2_fallback(&pat, true, &sr.id, &source_file.as_deref().unwrap_or("unknown"))?;
+                    let re = compile_regex_with_pcre2_fallback(
+                        &pat,
+                        true,
+                        &sr.id,
+                        source_file.as_deref().unwrap_or("unknown"),
+                    )?;
                     allow.push((re, pat));
                 }
             }
@@ -1991,7 +2011,12 @@ fn compile_semgrep_rule(
             rs.rules.push(rule);
         }
     } else if let Some(p) = sr.pattern {
-        let re = compile_regex_with_pcre2_fallback(&semgrep_to_regex(&p, &mv), false, &sr.id, &source_file.as_deref().unwrap_or("unknown"))?;
+        let re = compile_regex_with_pcre2_fallback(
+            &semgrep_to_regex(&p, &mv),
+            false,
+            &sr.id,
+            source_file.as_deref().unwrap_or("unknown"),
+        )?;
         let rule = CompiledRule {
             id: sr.id,
             severity,
@@ -2000,7 +2025,7 @@ fn compile_semgrep_rule(
             remediation: None,
             fix: sr.fix,
             interfile: sr.options.interfile,
-            matcher: MatcherKind::TextRegex(re.into(), p),
+            matcher: MatcherKind::TextRegex(re, p),
             source_file,
             sources: Vec::new(),
             sinks: Vec::new(),
@@ -2009,7 +2034,12 @@ fn compile_semgrep_rule(
         log_rule_summary(&rule);
         rs.rules.push(rule);
     } else if let Some(pr) = sr.pattern_regex {
-        let re = compile_regex_with_pcre2_fallback(&pr, true, &sr.id, &source_file.as_deref().unwrap_or("unknown"))?;
+        let re = compile_regex_with_pcre2_fallback(
+            &pr,
+            true,
+            &sr.id,
+            source_file.as_deref().unwrap_or("unknown"),
+        )?;
         let rule = CompiledRule {
             id: sr.id,
             severity,
@@ -2018,7 +2048,7 @@ fn compile_semgrep_rule(
             remediation: None,
             fix: sr.fix,
             interfile: sr.options.interfile,
-            matcher: MatcherKind::TextRegex(re.into(), pr),
+            matcher: MatcherKind::TextRegex(re, pr),
             source_file,
             sources: Vec::new(),
             sinks: Vec::new(),

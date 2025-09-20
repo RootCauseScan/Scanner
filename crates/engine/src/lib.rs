@@ -17,8 +17,7 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{mpsc, Arc, OnceLock, RwLock};
+use std::sync::{mpsc, Arc, OnceLock};
 use std::thread_local;
 use std::time::{Duration, Instant};
 use tracing::{debug, warn};
@@ -57,6 +56,7 @@ pub use path::{
 };
 
 use crate::debug::emit;
+use cache::rule_cache::{RuleCache, RuleCacheKey};
 
 pub fn parse_file_with_events(
     path: &Path,
@@ -261,18 +261,7 @@ fn dedup_findings(findings: &mut Vec<Finding>) {
     findings.retain(|f| seen.insert(f.id.clone()));
 }
 
-#[derive(Default)]
-struct CacheStats {
-    hits: AtomicUsize,
-    misses: AtomicUsize,
-}
-
-type RuleCacheKey = (PathBuf, String);
-type RuleCacheValue = Vec<Finding>;
-
-static RULE_CACHE: OnceLock<RwLock<HashMap<RuleCacheKey, RuleCacheValue>>> = OnceLock::new();
-static RULE_CACHE_ORDER: OnceLock<RwLock<VecDeque<RuleCacheKey>>> = OnceLock::new();
-static RULE_CACHE_STATS: OnceLock<CacheStats> = OnceLock::new();
+static RULE_CACHE: OnceLock<RuleCache> = OnceLock::new();
 
 #[cfg(test)]
 pub(crate) const RULE_CACHE_CAPACITY: usize = 3;
@@ -280,23 +269,12 @@ pub(crate) const RULE_CACHE_CAPACITY: usize = 3;
 pub(crate) const RULE_CACHE_CAPACITY: usize = 1024;
 
 fn rule_cache_stats_inner() -> (usize, usize) {
-    let stats = RULE_CACHE_STATS.get_or_init(Default::default);
-    (
-        stats.hits.load(Ordering::Relaxed),
-        stats.misses.load(Ordering::Relaxed),
-    )
+    rule_cache().stats()
 }
 
 pub fn reset_rule_cache() {
-    if let Some(map) = RULE_CACHE.get() {
-        map.write().unwrap_or_else(|e| e.into_inner()).clear();
-    }
-    if let Some(ord) = RULE_CACHE_ORDER.get() {
-        ord.write().unwrap_or_else(|e| e.into_inner()).clear();
-    }
-    if let Some(stats) = RULE_CACHE_STATS.get() {
-        stats.hits.store(0, Ordering::Relaxed);
-        stats.misses.store(0, Ordering::Relaxed);
+    if let Some(cache) = RULE_CACHE.get() {
+        cache.reset();
     }
 }
 
@@ -310,52 +288,38 @@ fn eval_rule(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
         "eval_rule: Starting evaluation of rule '{}' for file '{}'",
         rule.id, file.file_path
     );
-    let cache = RULE_CACHE.get_or_init(|| RwLock::new(HashMap::new()));
-    let order = RULE_CACHE_ORDER.get_or_init(|| RwLock::new(VecDeque::new()));
-    let stats = RULE_CACHE_STATS.get_or_init(Default::default);
-    let key = (PathBuf::from(&file.file_path), rule.id.clone());
+    let key = RuleCacheKey {
+        file: PathBuf::from(&file.file_path),
+        rule_id: rule.id.clone(),
+    };
 
-    if let Some(cached) = cache
-        .read()
-        .unwrap_or_else(|e| e.into_inner())
-        .get(&key)
-        .cloned()
-    {
-        stats.hits.fetch_add(1, Ordering::Relaxed);
-        let mut ord = order.write().unwrap_or_else(|e| e.into_inner());
-        if let Some(pos) = ord.iter().position(|k| k == &key) {
-            ord.remove(pos);
-        }
-        ord.push_back(key);
-        return cached;
+    let (result, hit) = rule_cache().get_or_insert(key, RULE_CACHE_CAPACITY, || {
+        debug!(
+            "eval_rule: Calling eval_rule_impl for rule '{}' and file '{}'",
+            rule.id, file.file_path
+        );
+        let res = eval_rule_impl(file, rule);
+        debug!(
+            "eval_rule: eval_rule_impl completed for rule '{}' and file '{}', found {} findings",
+            rule.id,
+            file.file_path,
+            res.len()
+        );
+        res
+    });
+
+    if !hit {
+        debug!(
+            "eval_rule: Completed evaluation of rule '{}' for file '{}'",
+            rule.id, file.file_path
+        );
     }
 
-    stats.misses.fetch_add(1, Ordering::Relaxed);
-    debug!(
-        "eval_rule: Calling eval_rule_impl for rule '{}' and file '{}'",
-        rule.id, file.file_path
-    );
-    let res = eval_rule_impl(file, rule);
-    debug!(
-        "eval_rule: eval_rule_impl completed for rule '{}' and file '{}', found {} findings",
-        rule.id,
-        file.file_path,
-        res.len()
-    );
-    let mut map = cache.write().unwrap_or_else(|e| e.into_inner());
-    let mut ord = order.write().unwrap_or_else(|e| e.into_inner());
-    map.insert(key.clone(), res.clone());
-    ord.push_back(key);
-    if ord.len() > RULE_CACHE_CAPACITY {
-        if let Some(oldest) = ord.pop_front() {
-            map.remove(&oldest);
-        }
-    }
-    debug!(
-        "eval_rule: Completed evaluation of rule '{}' for file '{}'",
-        rule.id, file.file_path
-    );
-    res
+    result
+}
+
+fn rule_cache() -> &'static RuleCache {
+    RULE_CACHE.get_or_init(RuleCache::default)
 }
 
 fn regex_ranges_any(source: &str, regs: &[AnyRegex]) -> Vec<(usize, usize)> {

@@ -681,10 +681,60 @@ fn rule_evaluation_is_cached() {
     file.source = Some("foo".into());
 
     let _ = eval_rule(&file, &rules.rules[0]);
-    let (_, misses) = rule_cache_stats();
-    assert!(misses >= 1);
+    let (hits, misses) = rule_cache_stats();
+    assert_eq!(hits, 0);
+    assert_eq!(misses, 1);
     let _ = eval_rule(&file, &rules.rules[0]);
     let (hits, misses_after) = rule_cache_stats();
-    assert!(hits >= 1);
-    assert_eq!(misses_after, misses);
+    assert_eq!(hits, 1);
+    assert_eq!(misses_after, 1);
+}
+
+#[test]
+fn rule_cache_evicts_oldest_entry() {
+    let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    reset_rule_cache();
+    let mut rules = RuleSet::default();
+    let re = Regex::new("foo").unwrap();
+    rules.rules.push(CompiledRule {
+        id: "test.rule".into(),
+        severity: Severity::Low,
+        category: "test".into(),
+        message: "test".into(),
+        remediation: None,
+        fix: None,
+        interfile: false,
+        matcher: MatcherKind::TextRegex(re.into(), String::new()),
+        source_file: None,
+        sources: vec![],
+        sinks: vec![],
+        languages: vec!["text".into()],
+    });
+    let mut files = [
+        FileIR::new("/tmp/file1".into(), "text".into()),
+        FileIR::new("/tmp/file2".into(), "text".into()),
+        FileIR::new("/tmp/file3".into(), "text".into()),
+        FileIR::new("/tmp/file4".into(), "text".into()),
+    ];
+    for file in &mut files {
+        file.source = Some("foo".into());
+    }
+
+    for file in files.iter().take(3) {
+        let _ = eval_rule(file, &rules.rules[0]);
+    }
+    let (hits, misses) = rule_cache_stats();
+    assert_eq!((hits, misses), (0, 3));
+
+    let _ = eval_rule(&files[3], &rules.rules[0]);
+    let (hits, misses) = rule_cache_stats();
+    assert_eq!((hits, misses), (0, 4));
+
+    let _ = eval_rule(&files[1], &rules.rules[0]);
+    let (hits, misses) = rule_cache_stats();
+    assert_eq!((hits, misses), (1, 4));
+
+    let _ = eval_rule(&files[0], &rules.rules[0]);
+    let (hits, misses) = rule_cache_stats();
+    assert_eq!((hits, misses), (1, 5));
 }
