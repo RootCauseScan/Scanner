@@ -13,7 +13,7 @@ use crate::config::{config_dir, load_config, save_config};
 use crate::output::{self, Format};
 use crate::{default_excludes, is_excluded, load_ignore_patterns, ui};
 
-use engine::plugin::manager::PluginManager;
+use engine::plugin::PluginManager;
 use engine::{AnalysisCache, Finding};
 use ir::FileIR;
 use loader::{visit, Severity};

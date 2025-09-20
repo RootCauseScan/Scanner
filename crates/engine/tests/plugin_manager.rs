@@ -3,7 +3,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use base64::{engine::general_purpose, Engine as _};
-use engine::plugin::manager::PluginManager;
+use engine::plugin::PluginManager;
 use plugin_core::FileSpec;
 use serde_json::Value;
 use tempfile::TempDir;
