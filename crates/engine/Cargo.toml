@@ -25,6 +25,7 @@ blake3 = "1"
 parsers = { path = "../parsers" }
 shlex = { workspace = true }
 plugin_core = { path = "../plugin_core" }
+patterns = { path = "../patterns" }
 
 [dev-dependencies]
 parsers = { path = "../parsers" }

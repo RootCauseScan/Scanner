@@ -870,6 +870,7 @@ dependencies = [
  "ir",
  "loader",
  "parsers",
+ "patterns",
  "plugin_core",
  "rayon",
  "regex",
@@ -1613,6 +1614,7 @@ version = "1.0.0"
 dependencies = [
  "anyhow",
  "fancy-regex",
+ "patterns",
  "pcre2",
  "regex",
  "serde",
@@ -1947,6 +1949,13 @@ dependencies = [
  "tree-sitter-ruby",
  "tree-sitter-rust",
  "tree-sitter-typescript",
+]
+
+[[package]]
+name = "patterns"
+version = "0.1.0"
+dependencies = [
+ "serde",
 ]
 
 [[package]]

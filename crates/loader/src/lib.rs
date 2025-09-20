@@ -20,9 +20,7 @@ use std::{
 };
 use tracing::debug;
 
-#[path = "../../engine/src/pattern.rs"]
-mod ast_pattern;
-pub use ast_pattern::{AstPattern, MetaVar, TaintPattern};
+pub use patterns::{AstPattern, MetaVar};
 
 mod walk;
 pub use walk::visit;
@@ -378,6 +376,8 @@ pub enum AnyRegex {
 pub mod regex_ext {
     pub type Regex = crate::AnyRegex;
 }
+
+pub type TaintPattern = patterns::TaintPattern<AnyRegex>;
 
 pub struct AnyMatch<'a> {
     text: &'a str,
