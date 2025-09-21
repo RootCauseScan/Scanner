@@ -47,7 +47,7 @@ pub fn glob_to_regex(pat: &str) -> Result<Regex, regex::Error> {
                     regex.push_str("[^/]*");
                 }
             }
-            '?' => regex.push('.'),
+            '?' => regex.push_str("[^/]"),
             '.' => regex.push_str("\\."),
             '/' => regex.push('/'),
             '(' | ')' | '+' | '|' | '^' | '$' | '[' | ']' | '{' | '}' | '\\' => {
