@@ -202,151 +202,117 @@ pub fn relax_semgrep_ellipsis(segment: String) -> String {
     result
 }
 
-pub fn semgrep_to_regex(pattern: &str, mv: &HashMap<String, String>) -> String {
-    fn esc(seg: &str) -> String {
-        let mut out = String::new();
-        for ch in seg.chars() {
-            match ch {
-                '{' | '}' | '[' | ']' => {
-                    out.push('\\');
-                    out.push(ch);
-                }
-                _ => out.push_str(&regex::escape(&ch.to_string())),
-            }
+#[derive(Clone)]
+struct PatternSegment {
+    content: String,
+    skip_space_substitution: bool,
+}
+
+impl PatternSegment {
+    fn literal(content: String) -> Self {
+        Self {
+            content,
+            skip_space_substitution: false,
         }
-        out
     }
 
-    fn handle_string_regex(seg: &str) -> String {
-        if let Some(start) = seg.find("=~/") {
-            let mut end_pos = None;
-            let search_start = start + 3;
-            let mut i = search_start;
-            while i < seg.len() {
-                if seg.chars().nth(i) == Some('/')
-                    && (i == 0 || seg.chars().nth(i - 1) != Some('\\'))
-                {
-                    end_pos = Some(i);
-                }
-                i += 1;
-            }
-
-            if let Some(end) = end_pos {
-                let regex_part = &seg[search_start..end];
-                let prefix = seg[..start].trim_end();
-                let suffix = &seg[end + 1..];
-                let mut out = String::new();
-                out.push_str(&esc(prefix));
-                out.push_str("\\s*=~?\\s*");
-                let quoted_double = regex_part.replace("\"", "\\\"");
-                let quoted_single = regex_part.replace("'", "\\'");
-                out.push_str(&format!(
-                    r#"(?:"{0}"|'{1}'|{2})"#,
-                    quoted_double, quoted_single, regex_part
-                ));
-                out.push_str(&esc(suffix));
-                return out;
-            }
+    fn regex(content: String) -> Self {
+        Self {
+            content,
+            skip_space_substitution: true,
         }
-        esc(seg)
     }
+}
+
+fn escape_pattern_segment(seg: &str) -> PatternSegment {
+    let mut out = String::new();
+    for ch in seg.chars() {
+        match ch {
+            '{' | '}' | '[' | ']' => {
+                out.push('\\');
+                out.push(ch);
+            }
+            _ => out.push_str(&regex::escape(&ch.to_string())),
+        }
+    }
+    PatternSegment::literal(out)
+}
+
+fn handle_string_regex_segments(seg: &str) -> Vec<PatternSegment> {
+    if let Some(start) = seg.find("=~/") {
+        let mut end_pos = None;
+        let search_start = start + 3;
+        let mut i = search_start;
+        while i < seg.len() {
+            if seg.chars().nth(i) == Some('/') && (i == 0 || seg.chars().nth(i - 1) != Some('\\')) {
+                end_pos = Some(i);
+            }
+            i += 1;
+        }
+
+        if let Some(end) = end_pos {
+            let regex_part = &seg[search_start..end];
+            let prefix = seg[..start].trim_end();
+            let suffix = &seg[end + 1..];
+            let mut segments = Vec::new();
+            segments.push(escape_pattern_segment(prefix));
+            segments.push(PatternSegment::regex("\\s*=~?\\s*".to_string()));
+            let quoted_double = regex_part.replace("\"", "\\\"");
+            let quoted_single = regex_part.replace("'", "\\'");
+            segments.push(PatternSegment::regex(format!(
+                r#"(?:"{0}"|'{1}'|{2})"#,
+                quoted_double, quoted_single, regex_part
+            )));
+            segments.push(escape_pattern_segment(suffix));
+            return segments;
+        }
+    }
+    vec![escape_pattern_segment(seg)]
+}
+
+fn build_semgrep_regex(pattern: &str, mv: &HashMap<String, String>) -> String {
     let metav = Regex::new(r"\$[A-Za-z_][A-Za-z0-9_]*").expect("valid metavariable regex");
-    let mut p = String::new();
+    let mut segments: Vec<PatternSegment> = Vec::new();
     let mut last = 0;
     for m in metav.find_iter(pattern) {
-        p.push_str(&handle_string_regex(&pattern[last..m.start()]));
+        segments.extend(handle_string_regex_segments(&pattern[last..m.start()]));
         let var = &pattern[m.start() + 1..m.end()];
         if let Some(r) = mv.get(var) {
             let anchored = normalize_metavariable_regex(r);
             let trimmed = anchored.trim_start_matches('^').trim_end_matches('$');
             if is_pure_lookaround(trimmed) {
-                p.push_str(&format!("((?:{trimmed})[^\\n]*?)"));
+                segments.push(PatternSegment::regex(format!("((?:{trimmed})[^\\n]*?)")));
             } else {
-                p.push_str(&format!("({trimmed})"));
+                segments.push(PatternSegment::regex(format!("({trimmed})")));
             }
         } else {
-            p.push_str("([^\n]*?)");
+            segments.push(PatternSegment::regex("([^\\n]*?)".to_string()));
         }
         last = m.end();
     }
-    p.push_str(&handle_string_regex(&pattern[last..]));
-    p = p.replace("\\.\\.\\.", ".*?");
-    p = p.replace(" ", "\\s+");
-    p = relax_semgrep_ellipsis(p);
+    segments.extend(handle_string_regex_segments(&pattern[last..]));
+
+    for segment in segments.iter_mut() {
+        if !segment.skip_space_substitution {
+            segment.content = segment.content.replace("\\.\\.\\.", ".*?");
+            segment.content = segment.content.replace(" ", "\\s+");
+        }
+    }
+
+    let mut p = String::new();
+    for segment in segments {
+        p.push_str(&segment.content);
+    }
+    relax_semgrep_ellipsis(p)
+}
+
+pub fn semgrep_to_regex(pattern: &str, mv: &HashMap<String, String>) -> String {
+    let p = build_semgrep_regex(pattern, mv);
     format!("(?s).*{p}.*")
 }
 
 pub fn semgrep_to_regex_exact(pattern: &str, mv: &HashMap<String, String>) -> String {
-    fn esc(seg: &str) -> String {
-        let mut out = String::new();
-        for ch in seg.chars() {
-            match ch {
-                '{' | '}' | '[' | ']' => {
-                    out.push('\\');
-                    out.push(ch);
-                }
-                _ => out.push_str(&regex::escape(&ch.to_string())),
-            }
-        }
-        out
-    }
-
-    fn handle_string_regex(seg: &str) -> String {
-        if let Some(start) = seg.find("=~/") {
-            let mut end_pos = None;
-            let search_start = start + 3;
-            let mut i = search_start;
-            while i < seg.len() {
-                if seg.chars().nth(i) == Some('/')
-                    && (i == 0 || seg.chars().nth(i - 1) != Some('\\'))
-                {
-                    end_pos = Some(i);
-                }
-                i += 1;
-            }
-
-            if let Some(end) = end_pos {
-                let regex_part = &seg[search_start..end];
-                let prefix = seg[..start].trim_end();
-                let suffix = &seg[end + 1..];
-                let mut out = String::new();
-                out.push_str(&esc(prefix));
-                out.push_str("\\s*=~?\\s*");
-                let quoted_double = regex_part.replace("\"", "\\\"");
-                let quoted_single = regex_part.replace("'", "\\'");
-                out.push_str(&format!(
-                    r#"(?:"{0}"|'{1}'|{2})"#,
-                    quoted_double, quoted_single, regex_part
-                ));
-                out.push_str(&esc(suffix));
-                return out;
-            }
-        }
-        esc(seg)
-    }
-    let metav = Regex::new(r"\$[A-Za-z_][A-Za-z0-9_]*").expect("valid metavariable regex");
-    let mut p = String::new();
-    let mut last = 0;
-    for m in metav.find_iter(pattern) {
-        p.push_str(&handle_string_regex(&pattern[last..m.start()]));
-        let var = &pattern[m.start() + 1..m.end()];
-        if let Some(r) = mv.get(var) {
-            let anchored = normalize_metavariable_regex(r);
-            let trimmed = anchored.trim_start_matches('^').trim_end_matches('$');
-            if is_pure_lookaround(trimmed) {
-                p.push_str(&format!("((?:{trimmed})[^\\n]*?)"));
-            } else {
-                p.push_str(&format!("({trimmed})"));
-            }
-        } else {
-            p.push_str("([^\n]*?)");
-        }
-        last = m.end();
-    }
-    p.push_str(&handle_string_regex(&pattern[last..]));
-    p = p.replace("\\.\\.\\.", ".*?");
-    p = p.replace(" ", "\\s+");
-    p = relax_semgrep_ellipsis(p);
+    let p = build_semgrep_regex(pattern, mv);
     format!("(?s){p}")
 }
 
