@@ -3,6 +3,12 @@ use regex::Regex;
 use std::fs;
 use std::path::Path;
 
+#[derive(Clone, Debug)]
+pub struct IgnorePattern {
+    pub regex: Regex,
+    pub exclude: bool,
+}
+
 pub mod args;
 pub mod config;
 pub mod output;
@@ -55,27 +61,38 @@ pub fn glob_to_regex(pat: &str) -> Result<Regex, regex::Error> {
     Regex::new(&regex)
 }
 
-/// Transforms a glob-style exclusion string into [`Regex`].
+/// Transforms a glob-style exclusion string into [`IgnorePattern`].
 /// Accepts trailing slashes and expands to `**` automatically.
 ///
 /// # Example
 ///
 /// ```
 /// use rootcause::parse_exclude;
-/// let re = parse_exclude("target/").unwrap();
-/// assert!(re.is_match("target/debug/foo"));
+/// let pattern = parse_exclude("target/").unwrap();
+/// assert!(pattern.exclude);
+/// assert!(pattern.regex.is_match("target/debug/foo"));
 /// ```
-pub fn parse_exclude(s: &str) -> Result<Regex, String> {
-    let glob_str = if s.ends_with('/') {
-        format!("{s}**")
+pub fn parse_exclude(s: &str) -> Result<IgnorePattern, String> {
+    let trimmed = s.trim();
+    let (exclude, glob_src) = if let Some(rest) = trimmed.strip_prefix('!') {
+        if rest.is_empty() {
+            return Err("empty exclude pattern".into());
+        }
+        (false, rest)
     } else {
-        s.to_string()
+        (true, trimmed)
     };
-    glob_to_regex(&glob_str).map_err(|e| e.to_string())
+    let glob_str = if glob_src.ends_with('/') {
+        format!("{glob_src}**")
+    } else {
+        glob_src.to_string()
+    };
+    let regex = glob_to_regex(&glob_str).map_err(|e| e.to_string())?;
+    Ok(IgnorePattern { regex, exclude })
 }
 
 /// Default exclusion patterns.
-pub fn default_excludes() -> Vec<Regex> {
+pub fn default_excludes() -> Vec<IgnorePattern> {
     vec![
         parse_exclude("**/node_modules/**").expect("valid default"),
         parse_exclude("**/.git/**").expect("valid default"),
@@ -83,8 +100,8 @@ pub fn default_excludes() -> Vec<Regex> {
 }
 
 /// Reads `.gitignore` and `.sastignore` from `root` and converts their
-/// valid entries to regular expressions.
-pub fn load_ignore_patterns(root: &Path) -> Vec<Regex> {
+/// valid entries to ordered [`IgnorePattern`] instances.
+pub fn load_ignore_patterns(root: &Path) -> Vec<IgnorePattern> {
     let mut patterns = Vec::new();
     for name in [".gitignore", ".sastignore"] {
         let path = root.join(name);
@@ -94,12 +111,20 @@ pub fn load_ignore_patterns(root: &Path) -> Vec<Regex> {
                 if line.is_empty() || line.starts_with('#') {
                     continue;
                 }
-                let mut pat = line.trim_start_matches('/').to_string();
+                let (is_negated, rest) = if let Some(stripped) = line.strip_prefix('!') {
+                    (true, stripped)
+                } else {
+                    (false, line)
+                };
+                let mut pat = rest.trim_start_matches('/').to_string();
                 if !pat.starts_with("**/") {
                     pat = format!("**/{pat}");
                 }
-                if let Ok(re) = parse_exclude(&pat) {
-                    patterns.push(re);
+                if is_negated {
+                    pat.insert(0, '!');
+                }
+                if let Ok(pattern) = parse_exclude(&pat) {
+                    patterns.push(pattern);
                 }
             }
         }
@@ -115,12 +140,22 @@ pub fn load_ignore_patterns(root: &Path) -> Vec<Regex> {
 /// ```
 /// use rootcause::{is_excluded, parse_exclude};
 /// use std::path::Path;
-/// let patterns = vec![parse_exclude("foo/**").unwrap()];
+/// let patterns = vec![
+///     parse_exclude("foo/**").unwrap(),
+///     parse_exclude("!foo/.keep").unwrap(),
+/// ];
 /// assert!(is_excluded(Path::new("foo/bar.txt"), &patterns, 0));
+/// assert!(!is_excluded(Path::new("foo/.keep"), &patterns, 0));
 /// ```
-pub fn is_excluded(path: &Path, patterns: &[Regex], max_file_size: u64) -> bool {
+pub fn is_excluded(path: &Path, patterns: &[IgnorePattern], max_file_size: u64) -> bool {
     let path_str = path.to_string_lossy().replace('\\', "/");
-    if patterns.iter().any(|re| re.is_match(&path_str)) {
+    let mut decision = None;
+    for pattern in patterns {
+        if pattern.regex.is_match(&path_str) {
+            decision = Some(pattern.exclude);
+        }
+    }
+    if decision == Some(true) {
         return true;
     }
     if max_file_size > 0 {

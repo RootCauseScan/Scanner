@@ -1,8 +1,8 @@
 use clap::{Args as ClapArgs, Parser, Subcommand};
-use regex::Regex;
 use std::path::PathBuf;
 
 use crate::config::config_dir;
+use crate::IgnorePattern;
 use crate::DEFAULT_MAX_FILE_SIZE;
 use loader::Severity;
 
@@ -95,7 +95,7 @@ pub struct ScanArgs {
     pub threads: usize,
     /// Exclude files matching these patterns (supports regex)
     #[arg(long, value_parser = crate::parse_exclude, value_delimiter = ',')]
-    pub exclude: Vec<Regex>,
+    pub exclude: Vec<IgnorePattern>,
     /// Don't use default exclusion patterns
     #[arg(long)]
     pub no_default_exclude: bool,

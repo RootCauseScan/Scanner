@@ -29,6 +29,31 @@ fn gitignore_files_are_skipped() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[test]
+fn gitignore_negations_are_respected() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempdir()?;
+    fs::create_dir_all(tmp.path().join("target"))?;
+    fs::write(tmp.path().join(".gitignore"), "target/**\n!target/.keep\n")?;
+    fs::write(tmp.path().join("target/.keep"), "")?;
+    fs::write(tmp.path().join("target/other.txt"), "")?;
+
+    let patterns = load_ignore_patterns(tmp.path());
+
+    let keep_path = tmp.path().join("target/.keep");
+    assert!(
+        !is_excluded(&keep_path, &patterns, DEFAULT_MAX_FILE_SIZE),
+        "negated path should not be excluded"
+    );
+
+    let other_path = tmp.path().join("target/other.txt");
+    assert!(
+        is_excluded(&other_path, &patterns, DEFAULT_MAX_FILE_SIZE),
+        "non-negated path should remain excluded"
+    );
+
+    Ok(())
+}
+
+#[test]
 fn invalid_entries_are_ignored() -> Result<(), Box<dyn std::error::Error>> {
     let tmp = tempdir()?;
     fs::write(tmp.path().join(".gitignore"), "[\nignored.txt\n")?;
