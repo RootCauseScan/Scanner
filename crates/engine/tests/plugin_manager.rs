@@ -29,8 +29,11 @@ for line in sys.stdin:
         send(mid,{"ok":True,"capabilities":["analyze"],"plugin_version":"1.0.0"})
     elif method=="file.analyze":
         files=params.get("files",[])
-        content=base64.b64decode(files[0].get("content_b64",""))
-        send(mid,{"findings":[{"message":content.decode()}]})
+        findings=[]
+        for f in files:
+            content=base64.b64decode(f.get("content_b64",""))
+            findings.append({"message":content.decode(),"file":f.get("path")})
+        send(mid,{"findings":findings})
     elif method=="plugin.ping":
         send(mid,{"pong":True})
     elif method=="plugin.shutdown":
@@ -310,6 +313,44 @@ timeout_ms = 5000
     }
     let res: Value = pm.analyzers()[0].analyze(vec![spec2]).unwrap();
     assert_eq!(res["findings"][0]["message"], "hello");
+    let virtual_path = res["findings"][0]["file"].as_str().unwrap();
+    assert!(virtual_path.starts_with("/virtual/content.txt-"));
+
+    // Analyzer plugin should produce unique and stable virtual paths
+    let duplicate_tmp = TempDir::new().unwrap();
+    let left_dir = duplicate_tmp.path().join("left");
+    let right_dir = duplicate_tmp.path().join("right");
+    fs::create_dir_all(&left_dir).unwrap();
+    fs::create_dir_all(&right_dir).unwrap();
+
+    let dup_a_path = left_dir.join("duplicate.txt");
+    let dup_b_path = right_dir.join("duplicate.txt");
+    fs::write(&dup_a_path, b"alpha").unwrap();
+    fs::write(&dup_b_path, b"bravo").unwrap();
+
+    let mut dup_a = FileSpec {
+        path: dup_a_path.to_string_lossy().into_owned(),
+        ..Default::default()
+    };
+    let mut dup_b = FileSpec {
+        path: dup_b_path.to_string_lossy().into_owned(),
+        ..Default::default()
+    };
+    dup_a.content_b64 = Some(general_purpose::STANDARD.encode(fs::read(&dup_a_path).unwrap()));
+    dup_b.content_b64 = Some(general_purpose::STANDARD.encode(fs::read(&dup_b_path).unwrap()));
+
+    let first: Value = pm.analyzers()[0]
+        .analyze(vec![dup_a.clone(), dup_b.clone()])
+        .unwrap();
+    let first_a = first["findings"][0]["file"].as_str().unwrap().to_owned();
+    let first_b = first["findings"][1]["file"].as_str().unwrap().to_owned();
+    assert!(first_a.starts_with("/virtual/duplicate.txt-"));
+    assert!(first_b.starts_with("/virtual/duplicate.txt-"));
+    assert_ne!(first_a, first_b);
+
+    let second: Value = pm.analyzers()[0].analyze(vec![dup_a, dup_b]).unwrap();
+    assert_eq!(second["findings"][0]["file"].as_str().unwrap(), first_a);
+    assert_eq!(second["findings"][1]["file"].as_str().unwrap(), first_b);
 
     let _ = fs::remove_file(file_path);
     let _ = fs::remove_file(file_path2);

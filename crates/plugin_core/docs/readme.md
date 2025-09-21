@@ -137,11 +137,18 @@ sequenceDiagram
 struct FileSpec {
     path: String,
     sha256: Option<String>,
-    language: Option<String>, 
+    language: Option<String>,
     content_b64: Option<String>,
     size: Option<u64>,
 }
 ```
+
+> **Virtual paths**: When a plugin declares `reads_fs = false`, RootCause masks the
+> original filesystem paths to avoid leaking workspace structure. Each file path
+> is rewritten to `/virtual/<file>-<hash>`, where `<file>` is the original file
+> name and `<hash>` is a stable identifier derived from the normalized path.
+> Identical files keep the same virtual path across requests, while files with
+> the same name in different directories receive distinct identifiers.
 
 ### PluginInit (Based on protocol.rs)
 ```rust

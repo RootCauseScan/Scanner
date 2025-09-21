@@ -1,5 +1,5 @@
 use std::ops::Deref;
-use std::path::Path;
+use std::path::{Component, Path};
 
 use anyhow::{Context, Result};
 use plugin_core::{FileSpec, RepoDiscoverParams, RepoDiscoverResult};
@@ -69,10 +69,35 @@ impl ManagedPlugin {
                         .file_name()
                         .and_then(|n| n.to_str())
                         .unwrap_or("file");
-                    f.path = format!("/virtual/{name}");
+                    let normalized = Self::normalize_virtual_path(&f.path);
+                    let hash = blake3::hash(normalized.as_bytes());
+                    let hash_hex = hash.to_hex();
+                    let short_hash = &hash_hex.as_str()[..12];
+                    f.path = format!("/virtual/{name}-{short_hash}");
                     f
                 })
                 .collect()
+        }
+    }
+
+    fn normalize_virtual_path(path: &str) -> String {
+        let mut normalized: Vec<String> = Vec::new();
+        for component in Path::new(path).components() {
+            match component {
+                Component::Prefix(prefix) => {
+                    normalized.push(prefix.as_os_str().to_string_lossy().replace("\\", "/"))
+                }
+                Component::RootDir => normalized.push(String::new()),
+                Component::CurDir => {}
+                Component::ParentDir => normalized.push(String::from("..")),
+                Component::Normal(part) => normalized.push(part.to_string_lossy().into_owned()),
+            }
+        }
+
+        if normalized.is_empty() {
+            path.replace("\\", "/")
+        } else {
+            normalized.join("/")
         }
     }
 
