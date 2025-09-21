@@ -165,11 +165,11 @@ pub fn relax_semgrep_ellipsis(segment: String) -> String {
     static LEADING_COMMA: OnceLock<Regex> = OnceLock::new();
 
     let trailing = TRAILING_COMMA.get_or_init(|| {
-        Regex::new(r"(?P<ell>\.\*\?)(?P<comma>,(?:\\s[+*](?:\\?)?|\\s+)?)")
+        Regex::new(r"(?P<ell>\.\*\?)(?P<comma>,(?:\\s+[+*]\\??|\\s+)?)")
             .expect("valid trailing ellipsis regex")
     });
     let leading = LEADING_COMMA.get_or_init(|| {
-        Regex::new(r"(?P<comma>,(?:\\s[+*](?:\\?)?|\\s+)?)?(?P<ell>\.\*\?)")
+        Regex::new(r"(?P<comma>,(?:\\s+[+*]\\??|\\s+)?)?(?P<ell>\.\*\?)")
             .expect("valid leading ellipsis regex")
     });
 
