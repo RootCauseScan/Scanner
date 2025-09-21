@@ -71,14 +71,23 @@ impl ErrorCollection {
         if !self.duplicate_rules.is_empty() {
             println!();
             println!("{}", "Duplicate rule IDs found:".bright_red().bold());
-            for (rule_id, files) in &self.duplicate_rules {
-                println!(
-                    "  {} Rule ID '{}' found in:",
-                    "•".bright_red(),
-                    rule_id.bright_white().bold()
-                );
-                for file in files {
-                    println!("    - {}", file.bright_cyan());
+            for (i, (rule_id, files)) in self.duplicate_rules.iter().enumerate() {
+                if full || i < 5 {
+                    println!(
+                        "  {} Rule ID '{}' found in:",
+                        "•".bright_red(),
+                        rule_id.bright_white().bold()
+                    );
+                    for file in files {
+                        println!("    - {}", file.bright_cyan());
+                    }
+                } else if i == 5 {
+                    println!(
+                        "  {} {} more duplicate rule IDs...",
+                        "•".bright_red(),
+                        (self.duplicate_rules.len() - 5).to_string().bright_yellow()
+                    );
+                    break;
                 }
             }
         }
