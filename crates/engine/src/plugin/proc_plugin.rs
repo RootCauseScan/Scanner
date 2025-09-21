@@ -99,7 +99,10 @@ impl ProcPlugin {
 
     fn call<R: DeserializeOwned>(&self, method: &str, params: Value) -> Result<R> {
         let worker = self.next_worker();
-        let mut worker = worker.lock().expect("worker poisoned");
+        let mut worker = worker.lock().map_err(|err| {
+            debug!(error = %err, "worker mutex poisoned");
+            anyhow!("worker unavailable: worker mutex poisoned by a previous panic")
+        })?;
         worker.call(method, params)
     }
 
@@ -135,9 +138,76 @@ impl ProcPlugin {
 impl Drop for ProcPlugin {
     fn drop(&mut self) {
         for worker in &self.workers {
-            if let Ok(mut w) = worker.lock() {
-                let _ = w.call::<Value>("plugin.shutdown", Value::Null);
+            match worker.lock() {
+                Ok(mut w) => {
+                    let _ = w.call::<Value>("plugin.shutdown", Value::Null);
+                }
+                Err(err) => {
+                    debug!(error = %err, "worker unavailable during shutdown");
+                }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::worker::Worker;
+    use super::*;
+    use plugin_core::Limits;
+    use serde_json::Value;
+    use std::fs;
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+    use std::sync::{atomic::AtomicUsize, Mutex};
+    use tempfile::TempDir;
+
+    const NOOP_PY: &str = r#"#!/usr/bin/env python3
+import sys
+
+for _line in sys.stdin:
+    pass
+"#;
+
+    #[test]
+    fn call_returns_error_when_worker_mutex_poisoned() {
+        let tmp = TempDir::new().expect("tempdir");
+        let script = tmp.path().join("noop_plugin.py");
+        fs::write(&script, NOOP_PY).expect("write script");
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = fs::metadata(&script).expect("metadata").permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(&script, perms).expect("set permissions");
+        }
+
+        let limits = Limits::default();
+        let worker =
+            Worker::spawn(&script, &[], tmp.path(), &limits, "noop").expect("spawn worker");
+
+        let plugin = ProcPlugin {
+            workers: vec![Mutex::new(worker)],
+            next: AtomicUsize::new(0),
+        };
+
+        {
+            let worker_mutex = &plugin.workers[0];
+            let _ = catch_unwind(AssertUnwindSafe(|| {
+                let _guard = worker_mutex.lock().expect("lock worker");
+                panic!("poison worker mutex");
+            }));
+        }
+
+        let error = plugin
+            .call::<Value>("plugin.ping", Value::Null)
+            .expect_err("expected poisoned worker error");
+        assert!(
+            error.to_string().contains("worker unavailable"),
+            "unexpected error message: {}",
+            error
+        );
+
+        drop(plugin);
     }
 }
