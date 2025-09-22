@@ -393,6 +393,34 @@ fn derive_assignment_lhs(source: &str, pos: usize) -> Option<String> {
         .and_then(|caps| caps.get(1).map(|m| m.as_str().to_string()))
 }
 
+fn extract_sink_variables(text: &str) -> Vec<(String, usize)> {
+    let mut vars = Vec::new();
+    let mut iter = text.char_indices().peekable();
+
+    while let Some((idx, ch)) = iter.next() {
+        if ch == '$' {
+            let mut var_name = String::new();
+            while let Some(&(_, next_ch)) = iter.peek() {
+                if next_ch.is_ascii_alphanumeric() || next_ch == '_' {
+                    var_name.push(next_ch);
+                    iter.next();
+                } else {
+                    break;
+                }
+            }
+            if !var_name.is_empty() {
+                vars.push((var_name, idx));
+            }
+        }
+    }
+
+    vars
+}
+
+const PHP_SUPERGLOBALS: &[&str] = &[
+    "_GET", "_POST", "_REQUEST", "_COOKIE", "_SERVER", "_ENV", "_FILES", "_SESSION", "GLOBALS",
+];
+
 fn regex_ranges_with_focus(
     source: &str,
     regs: &[AnyRegex],
@@ -1485,12 +1513,40 @@ fn eval_rule_impl(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
                                         symbol = Some(lhs);
                                     }
                                 }
-                                if let Some(sym) = symbol {
-                                    let (line, column) = line_col_at(source_text, ms);
+                                let mut push_symbol = |sym: String, pos: usize| {
+                                    let (line, column) = line_col_at(source_text, pos);
                                     if !source_syms.iter().any(|(existing, l, c)| {
                                         existing == &sym && *l == line && *c == column
                                     }) {
                                         source_syms.push((sym, line, column));
+                                    }
+                                };
+
+                                if let Some(sym) = symbol {
+                                    push_symbol(sym, ms);
+                                } else {
+                                    let snippet = &source_text[ms..me];
+                                    let snippet_vars = extract_sink_variables(snippet);
+                                    let mut added_any = false;
+                                    for (sym, rel_offset) in snippet_vars {
+                                        push_symbol(sym, ms + rel_offset);
+                                        added_any = true;
+                                    }
+                                    if !added_any && file.file_type.eq_ignore_ascii_case("php") {
+                                        let line_start = source_text[..ms]
+                                            .rfind('\n')
+                                            .map(|idx| idx + 1)
+                                            .unwrap_or(0);
+                                        let line_end = source_text[line_start..]
+                                            .find('\n')
+                                            .map(|idx| line_start + idx)
+                                            .unwrap_or_else(|| source_text.len());
+                                        let line_text = &source_text[line_start..line_end];
+                                        for (sym, rel_offset) in extract_sink_variables(line_text) {
+                                            if PHP_SUPERGLOBALS.contains(&sym.as_str()) {
+                                                push_symbol(sym, line_start + rel_offset);
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -1503,6 +1559,7 @@ fn eval_rule_impl(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
                                     continue;
                                 }
                             }
+
                             if !inside_ranges.is_empty()
                                 && inside_ranges.iter().all(|(s, e)| ms < *s || me > *e)
                             {
@@ -1554,12 +1611,40 @@ fn eval_rule_impl(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
                                     symbol = Some(lhs);
                                 }
                             }
-                            if let Some(sym) = symbol {
-                                let (line, column) = line_col_at(source_text, ms);
+                            let mut push_symbol = |sym: String, pos: usize| {
+                                let (line, column) = line_col_at(source_text, pos);
                                 if !source_syms.iter().any(|(existing, l, c)| {
                                     existing == &sym && *l == line && *c == column
                                 }) {
                                     source_syms.push((sym, line, column));
+                                }
+                            };
+
+                            if let Some(sym) = symbol {
+                                push_symbol(sym, ms);
+                            } else {
+                                let snippet = &source_text[ms..me];
+                                let snippet_vars = extract_sink_variables(snippet);
+                                let mut added_any = false;
+                                for (sym, rel_offset) in snippet_vars {
+                                    push_symbol(sym, ms + rel_offset);
+                                    added_any = true;
+                                }
+                                if !added_any && file.file_type.eq_ignore_ascii_case("php") {
+                                    let line_start = source_text[..ms]
+                                        .rfind('\n')
+                                        .map(|idx| idx + 1)
+                                        .unwrap_or(0);
+                                    let line_end = source_text[line_start..]
+                                        .find('\n')
+                                        .map(|idx| line_start + idx)
+                                        .unwrap_or_else(|| source_text.len());
+                                    let line_text = &source_text[line_start..line_end];
+                                    for (sym, rel_offset) in extract_sink_variables(line_text) {
+                                        if PHP_SUPERGLOBALS.contains(&sym.as_str()) {
+                                            push_symbol(sym, line_start + rel_offset);
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -2037,6 +2122,37 @@ fn eval_rule_impl(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
                 }
             }
             let has_flow = tracker.as_ref().map(|t| t.has_flow()).unwrap_or(true);
+            let collect_sink_vars = |sink_text: &str, excerpt: &str, column: usize| {
+                let mut vars: Vec<String> = extract_sink_variables(sink_text)
+                    .into_iter()
+                    .map(|(name, _)| name)
+                    .collect();
+                if vars.is_empty() && file.file_type.eq_ignore_ascii_case("php") {
+                    let excerpt_vars = extract_sink_variables(excerpt);
+                    let col_idx = column.saturating_sub(1);
+                    for (name, offset) in excerpt_vars {
+                        if offset == col_idx
+                            && PHP_SUPERGLOBALS.contains(&name.as_str())
+                            && col_idx <= excerpt.len()
+                            && excerpt[..col_idx].contains(',')
+                            && !vars.iter().any(|existing| existing == &name)
+                        {
+                            vars.push(name);
+                        }
+                    }
+                }
+                vars
+            };
+            let sink_vars_unsanitized = |vars: &[String]| {
+                if vars.is_empty() {
+                    if file.file_type.eq_ignore_ascii_case("php") {
+                        return false;
+                    }
+                    return true;
+                }
+                vars.iter()
+                    .any(|var| file.symbols.get(var).map(|s| !s.sanitized).unwrap_or(true))
+            };
             if source_syms.is_empty() {
                 if !has_flow || tracker.is_none() {
                     return Vec::new();
@@ -2074,47 +2190,12 @@ fn eval_rule_impl(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
                 debug!("eval_rule_impl: No flow found, returning empty findings for rule '{}' and file '{}'", rule.id, file.file_path);
                 return Vec::new();
             }
-            // Helper function to extract variable names from sink text
-            fn extract_sink_variables(text: &str) -> Vec<String> {
-                let mut vars = Vec::new();
-                let mut chars = text.chars().peekable();
-
-                while let Some(ch) = chars.next() {
-                    if ch == '$' {
-                        let mut var_name = String::new();
-                        while let Some(&next_ch) = chars.peek() {
-                            if next_ch.is_alphanumeric() || next_ch == '_' {
-                                var_name.push(chars.next().unwrap());
-                            } else {
-                                break;
-                            }
-                        }
-                        if !var_name.is_empty() {
-                            vars.push(var_name);
-                        }
-                    }
-                }
-                vars
-            }
-
-            // Helper function to check if any variables in sink are unsanitized
-            fn has_unsanitized_sink_vars(file: &FileIR, sink_text: &str) -> bool {
-                let sink_vars = extract_sink_variables(sink_text);
-                if sink_vars.is_empty() {
-                    // If we cannot recover metavariables from the sink text, assume
-                    // the sink is relevant so we do not suppress legitimate matches.
-                    return true;
-                }
-                sink_vars
-                    .iter()
-                    .any(|var| file.symbols.get(var).map(|s| !s.sanitized).unwrap_or(true))
-            }
-
             let mut findings = Vec::new();
             for (sym, _, _) in &source_syms {
                 for (sink_text, line, column, excerpt) in &sink_hits {
                     // Skip if all variables in the sink are sanitized
-                    if !has_unsanitized_sink_vars(file, sink_text) {
+                    let sink_vars = collect_sink_vars(sink_text, excerpt, *column);
+                    if !sink_vars_unsanitized(&sink_vars) {
                         debug!(
                             "Skipping sink at line {} because all variables are sanitized: {}",
                             line, sink_text
@@ -2122,7 +2203,16 @@ fn eval_rule_impl(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
                         continue;
                     }
 
-                    if find_taint_path(file, sym, sink_text).is_some() {
+                    let mut has_path = find_taint_path(file, sym, sink_text).is_some();
+                    if !has_path
+                        && file.file_type.eq_ignore_ascii_case("php")
+                        && PHP_SUPERGLOBALS.contains(&sym.as_str())
+                        && sink_vars.iter().any(|var| var == sym)
+                    {
+                        has_path = true;
+                    }
+
+                    if has_path {
                         let id = blake3::hash(
                             format!("{}:{}:{}:{}", rule.id, canonical, line, column).as_bytes(),
                         )
