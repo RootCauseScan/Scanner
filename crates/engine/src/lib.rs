@@ -482,11 +482,13 @@ fn derive_assignment_lhs(source: &str, pos: usize) -> Option<String> {
         return None;
     }
     let re = ASSIGN_LHS_RE.get_or_init(|| {
-        Regex::new(r"([A-Za-z_][A-Za-z0-9_]*)\s*(?::[A-Za-z_][A-Za-z0-9_]*)?\s*=\s*$")
+        Regex::new(
+            r"(?:(?P<prefix>[$@%&*]+))?(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*(?::[A-Za-z_][A-Za-z0-9_]*)?\s*=\s*$",
+        )
             .expect("valid assignment regex")
     });
     re.captures(prefix)
-        .and_then(|caps| caps.get(1).map(|m| m.as_str().to_string()))
+        .and_then(|caps| caps.name("name").map(|m| m.as_str().to_string()))
 }
 
 fn extract_sink_variables(text: &str) -> Vec<(String, usize)> {
