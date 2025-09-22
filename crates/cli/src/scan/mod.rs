@@ -361,7 +361,7 @@ maintainer = "RootCause Security Team <contact@rootcause.dev>"
     // Only load extra rules from the configuration if we're using the default directory
     // and the rules path is a directory (not a single file)
     let default_rules_dir = config_dir().join("rules");
-    if args.rules == default_rules_dir && args.rules.is_dir() {
+    if !args.rules_provided && args.rules == default_rules_dir && args.rules.is_dir() {
         let cfg_rule_dirs: Vec<PathBuf> = user_cfg
             .rules
             .rule_dirs

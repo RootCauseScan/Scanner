@@ -1,4 +1,4 @@
-use clap::{Args as ClapArgs, Parser, Subcommand};
+use clap::{parser::ValueSource, Args as ClapArgs, Parser, Subcommand};
 use std::path::PathBuf;
 
 use crate::config::config_dir;
@@ -77,6 +77,23 @@ pub enum Commands {
     Rules(RulesCmd),
 }
 
+pub fn parse_cli() -> Cli {
+    use clap::{CommandFactory, FromArgMatches};
+
+    let matches = Cli::command().get_matches();
+    let mut cli = Cli::from_arg_matches(&matches).unwrap_or_else(|e| e.exit());
+    if let Some(("scan", scan_matches)) = matches.subcommand() {
+        if let Commands::Scan(args) = &mut cli.command {
+            if let Some(source) = scan_matches.value_source("rules") {
+                if source != ValueSource::DefaultValue {
+                    args.rules_provided = true;
+                }
+            }
+        }
+    }
+    cli
+}
+
 #[derive(ClapArgs)]
 pub struct ScanArgs {
     /// Path to scan (file or directory)
@@ -84,6 +101,9 @@ pub struct ScanArgs {
     /// Path to rules directory or ruleset
     #[arg(long, default_value_os_t = default_rules_path())]
     pub rules: PathBuf,
+    /// True if `--rules` was explicitly provided.
+    #[arg(skip = false)]
+    pub rules_provided: bool,
     /// Output format for scan results
     #[arg(long, value_enum, default_value_t = Format::Text)]
     pub format: Format,
