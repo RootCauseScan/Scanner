@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::{analyze_files_with_config, EngineConfig, EngineMetrics, Finding};
+use crate::{analyze_files_with_config, cache::hash_file, EngineConfig, EngineMetrics, Finding};
 
 #[derive(Default, Serialize, Deserialize)]
 struct CacheData {
@@ -100,11 +100,6 @@ impl HashCache {
             let _ = fs::write(&self.path, s);
         }
     }
-}
-
-fn hash_file(file: &FileIR) -> String {
-    let bytes = serde_json::to_vec(file).unwrap_or_default();
-    hash(&bytes).to_hex().to_string()
 }
 
 fn hash_rule(rule: &CompiledRule) -> String {

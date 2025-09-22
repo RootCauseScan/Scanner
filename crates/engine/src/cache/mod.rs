@@ -1,6 +1,6 @@
 pub mod rule_cache;
 
-use blake3::hash;
+use blake3::Hasher;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -39,6 +39,16 @@ impl AnalysisCache {
 }
 
 pub fn hash_file(file: &FileIR) -> String {
-    let bytes = serde_json::to_vec(file).unwrap_or_default();
-    hash(&bytes).to_hex().to_string()
+    let mut hasher = Hasher::new();
+    hasher.update(file.file_type.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(file.file_path.as_bytes());
+    hasher.update(b"\0");
+    if let Some(source) = &file.source {
+        hasher.update(source.as_bytes());
+    } else {
+        let bytes = serde_json::to_vec(&file.nodes).unwrap_or_default();
+        hasher.update(&bytes);
+    }
+    hasher.finalize().to_hex().to_string()
 }
