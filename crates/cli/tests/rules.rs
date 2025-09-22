@@ -1,9 +1,6 @@
 use assert_cmd::prelude::*;
-use predicates::str::contains;
-use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
-use tempfile::TempDir;
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
