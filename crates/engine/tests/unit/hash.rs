@@ -70,6 +70,47 @@ fn reuses_cache_and_detects_changes() {
 }
 
 #[test]
+fn analyzes_without_cache() {
+    let mut rules = RuleSet::default();
+    rules.rules.push(CompiledRule {
+        id: "r1".into(),
+        severity: Severity::Low,
+        category: "test".into(),
+        message: "m".into(),
+        remediation: None,
+        fix: None,
+        interfile: false,
+        matcher: MatcherKind::TextRegex(Regex::new("foo").unwrap().into(), String::new()),
+        source_file: None,
+        sources: vec![],
+        sinks: vec![],
+        languages: vec!["k8s".into()],
+    });
+
+    let file = mk_file_ir(vec![("k8s", "a", json!("foo"))]);
+
+    let findings = analyze_files_with_config(
+        &[file.clone()],
+        &rules,
+        &EngineConfig::default(),
+        None,
+        None,
+    );
+    assert_eq!(findings.len(), 1);
+    assert_eq!(findings[0].rule_id, "r1");
+
+    let streaming = analyze_files_streaming(
+        vec![file.clone()],
+        &rules,
+        &EngineConfig::default(),
+        None,
+        None,
+    );
+    assert_eq!(streaming.len(), 1);
+    assert_eq!(streaming[0].rule_id, "r1");
+}
+
+#[test]
 fn handles_corrupt_cache_file() {
     let tmp = tempdir().unwrap();
     let cache = tmp.path().join("hashes.json");
