@@ -745,6 +745,21 @@ pub struct EngineMetrics {
     pub parser: ParserMetrics,
 }
 
+fn rules_require_call_graph(rules: &RuleSet) -> bool {
+    rules
+        .rules
+        .iter()
+        .any(|rule| rule.interfile || matches!(rule.matcher, MatcherKind::TaintRule { .. }))
+}
+
+fn configure_call_graph(files: &[FileIR], rules: &RuleSet) {
+    if rules_require_call_graph(rules) {
+        dataflow::set_call_graph(dataflow::CallGraph::build(files));
+    } else {
+        dataflow::set_call_graph(dataflow::CallGraph::default());
+    }
+}
+
 pub fn analyze_files_with_config(
     files: &[FileIR],
     rules: &RuleSet,
@@ -752,7 +767,7 @@ pub fn analyze_files_with_config(
     mut cache: Option<&mut AnalysisCache>,
     mut metrics: Option<&mut EngineMetrics>,
 ) -> Vec<Finding> {
-    dataflow::set_call_graph(dataflow::CallGraph::build(files));
+    configure_call_graph(files, rules);
     warmup_wasm_rules(rules);
     let rule_index = ApplicableRuleIndex::new(rules);
     debug!(
@@ -845,6 +860,10 @@ pub fn analyze_files_streaming<I>(
 where
     I: IntoIterator<Item = FileIR>,
 {
+    let needs_call_graph = rules_require_call_graph(rules);
+    if !needs_call_graph {
+        dataflow::set_call_graph(dataflow::CallGraph::default());
+    }
     warmup_wasm_rules(rules);
     let rule_index = ApplicableRuleIndex::new(rules);
     let mut findings = Vec::new();
@@ -859,7 +878,9 @@ where
             "Streaming analysis: processing file {}: {}",
             count, f.file_path
         );
-        dataflow::set_call_graph(dataflow::CallGraph::build(std::slice::from_ref(&f)));
+        if needs_call_graph {
+            dataflow::set_call_graph(dataflow::CallGraph::build(std::slice::from_ref(&f)));
+        }
         let h = cache::hash_file(&f);
         if let Some(c) = cache.as_ref().and_then(|c| c.get(&h)) {
             findings.extend(c.clone());
@@ -985,13 +1006,13 @@ pub fn analyze_file_with_config(
     cfg: &EngineConfig,
     metrics: Option<&mut EngineMetrics>,
 ) -> Vec<Finding> {
-    dataflow::set_call_graph(dataflow::CallGraph::build(std::slice::from_ref(file)));
+    configure_call_graph(std::slice::from_ref(file), rules);
     let rule_index = ApplicableRuleIndex::new(rules);
     analyze_file_with_config_inner(file, &rule_index, cfg, metrics)
 }
 
 pub fn analyze_file(file: &FileIR, rules: &RuleSet) -> Vec<Finding> {
-    dataflow::set_call_graph(dataflow::CallGraph::build(std::slice::from_ref(file)));
+    configure_call_graph(std::slice::from_ref(file), rules);
     let rule_index = ApplicableRuleIndex::new(rules);
     analyze_file_inner(file, &rule_index)
 }
