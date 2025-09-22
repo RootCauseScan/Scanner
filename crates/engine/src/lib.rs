@@ -2,6 +2,7 @@
 //! Orchestrates parallel execution, applies timeouts and generates findings.
 
 use ir::{AstNode, FileAst, FileIR};
+use loader::schema::compiled::GENERIC_LANGUAGE;
 use loader::{
     semgrep_to_regex, semgrep_to_regex_exact, AnyRegex, AstPattern as LoaderAstPattern,
     MetaVar as LoaderMetaVar,
@@ -198,6 +199,101 @@ fn warmup_wasm_rules(rules: &RuleSet) {
                 map.entry(wasm_path.clone()).or_default().push(instance);
             });
         }
+    }
+}
+
+struct ApplicableRuleIndex<'a> {
+    total_rules: usize,
+    generic: Arc<[&'a CompiledRule]>,
+    by_language: HashMap<String, Arc<[&'a CompiledRule]>>,
+    empty: Arc<[&'a CompiledRule]>,
+}
+
+impl<'a> ApplicableRuleIndex<'a> {
+    fn new(rules: &'a RuleSet) -> Self {
+        let total_rules = rules.rules.len();
+        let mut generic_entries: Vec<(usize, &'a CompiledRule)> = Vec::new();
+        let mut by_language_entries: HashMap<String, Vec<(usize, &'a CompiledRule)>> =
+            HashMap::new();
+
+        for (idx, rule) in rules.rules.iter().enumerate() {
+            if rule.languages.iter().any(|lang| lang == GENERIC_LANGUAGE) {
+                generic_entries.push((idx, rule));
+                continue;
+            }
+            for lang in &rule.languages {
+                let normalized = lang.trim().to_ascii_lowercase();
+                by_language_entries
+                    .entry(normalized)
+                    .or_default()
+                    .push((idx, rule));
+            }
+        }
+
+        let generic_vec: Vec<&'a CompiledRule> =
+            generic_entries.iter().map(|(_, rule)| *rule).collect();
+        let generic = Arc::from(generic_vec.into_boxed_slice());
+        let empty = Arc::from(Vec::<&'a CompiledRule>::new().into_boxed_slice());
+
+        let mut by_language = HashMap::with_capacity(by_language_entries.len());
+        for (lang, specific_rules) in by_language_entries {
+            let mut merged: Vec<&'a CompiledRule> =
+                Vec::with_capacity(generic_entries.len() + specific_rules.len());
+            let mut generic_idx = 0;
+            let mut specific_idx = 0;
+            while generic_idx < generic_entries.len() && specific_idx < specific_rules.len() {
+                if generic_entries[generic_idx].0 < specific_rules[specific_idx].0 {
+                    merged.push(generic_entries[generic_idx].1);
+                    generic_idx += 1;
+                } else {
+                    merged.push(specific_rules[specific_idx].1);
+                    specific_idx += 1;
+                }
+            }
+            merged.extend(
+                generic_entries
+                    .iter()
+                    .skip(generic_idx)
+                    .map(|(_, rule)| *rule),
+            );
+            merged.extend(
+                specific_rules
+                    .iter()
+                    .skip(specific_idx)
+                    .map(|(_, rule)| *rule),
+            );
+            by_language.insert(lang, Arc::from(merged.into_boxed_slice()));
+        }
+
+        Self {
+            total_rules,
+            generic,
+            by_language,
+            empty,
+        }
+    }
+
+    fn rules_for(&self, file_type: &str) -> Arc<[&'a CompiledRule]> {
+        let trimmed = file_type.trim();
+        if trimmed.is_empty() {
+            return if self.generic.is_empty() {
+                self.empty.clone()
+            } else {
+                self.generic.clone()
+            };
+        }
+        let key = trimmed.to_ascii_lowercase();
+        self.by_language.get(&key).cloned().unwrap_or_else(|| {
+            if self.generic.is_empty() {
+                self.empty.clone()
+            } else {
+                self.generic.clone()
+            }
+        })
+    }
+
+    fn total_rules(&self) -> usize {
+        self.total_rules
     }
 }
 
@@ -562,22 +658,19 @@ fn use_aliases(file: &FileIR) -> Vec<(String, String)> {
     out
 }
 
-fn analyze_file_inner(file: &FileIR, rules: &RuleSet) -> Vec<Finding> {
+fn analyze_file_inner(file: &FileIR, rule_index: &ApplicableRuleIndex<'_>) -> Vec<Finding> {
     init_tokio();
-    let applicable_rules: Vec<&CompiledRule> = rules
-        .rules
-        .iter()
-        .filter(|rule| rule.applies_to(&file.file_type))
-        .collect();
+    let applicable_rules = rule_index.rules_for(&file.file_type);
     debug!(
         "Analyzing file '{}' with {} applicable rules (total rules: {})",
         file.file_path,
         applicable_rules.len(),
-        rules.rules.len()
+        rule_index.total_rules()
     );
     debug!("Starting rule evaluation for file '{}'", file.file_path);
     let findings: Vec<Finding> = applicable_rules
-        .into_iter()
+        .iter()
+        .copied()
         .flat_map(|r| {
             debug!("Evaluating rule '{}' for file '{}'", r.id, file.file_path);
             let result = eval_rule(file, r);
@@ -601,7 +694,7 @@ fn analyze_file_inner(file: &FileIR, rules: &RuleSet) -> Vec<Finding> {
 
 fn analyze_files_inner(
     files: &[(String, &FileIR)],
-    rules: &RuleSet,
+    rule_index: &ApplicableRuleIndex<'_>,
 ) -> Vec<(String, Vec<Finding>)> {
     debug!(
         "analyze_files_inner: Starting file processing for {} files",
@@ -611,7 +704,7 @@ fn analyze_files_inner(
         .par_iter()
         .map(|(h, f)| {
             debug!("analyze_files_inner: Processing file '{}'", h);
-            let findings = analyze_file_inner(f, rules);
+            let findings = analyze_file_inner(f, rule_index);
             debug!(
                 "analyze_files_inner: Completed processing file '{}', found {} findings",
                 h,
@@ -661,6 +754,7 @@ pub fn analyze_files_with_config(
 ) -> Vec<Finding> {
     dataflow::set_call_graph(dataflow::CallGraph::build(files));
     warmup_wasm_rules(rules);
+    let rule_index = ApplicableRuleIndex::new(rules);
     debug!(
         "Starting analysis with config of {} files with {} rules",
         files.len(),
@@ -679,7 +773,7 @@ pub fn analyze_files_with_config(
 
     let mut findings =
         if cfg.file_timeout.is_none() && cfg.rule_timeout.is_none() && metrics.is_none() {
-            analyze_files_inner(&to_analyze, rules)
+            analyze_files_inner(&to_analyze, &rule_index)
                 .into_iter()
                 .flat_map(|(h, fs)| {
                     if let Some(c) = cache.as_deref_mut() {
@@ -697,7 +791,8 @@ pub fn analyze_files_with_config(
                     files.len(),
                     f.file_path
                 );
-                let mut res = analyze_file_with_config_inner(f, rules, cfg, metrics.as_deref_mut());
+                let mut res =
+                    analyze_file_with_config_inner(f, &rule_index, cfg, metrics.as_deref_mut());
                 if let Some(c) = cache.as_deref_mut() {
                     c.insert(h, res.clone());
                 }
@@ -751,6 +846,7 @@ where
     I: IntoIterator<Item = FileIR>,
 {
     warmup_wasm_rules(rules);
+    let rule_index = ApplicableRuleIndex::new(rules);
     let mut findings = Vec::new();
     debug!(
         "Starting streaming analysis with {} rules",
@@ -768,7 +864,8 @@ where
         if let Some(c) = cache.as_ref().and_then(|c| c.get(&h)) {
             findings.extend(c.clone());
         } else {
-            let mut res = analyze_file_with_config_inner(&f, rules, cfg, metrics.as_deref_mut());
+            let mut res =
+                analyze_file_with_config_inner(&f, &rule_index, cfg, metrics.as_deref_mut());
             if cfg.suppress_comment.is_some() {
                 res.retain(|fi| !f.suppressed.contains(&fi.line));
             }
@@ -827,7 +924,7 @@ pub fn merge_plugin_findings(
 
 fn analyze_file_with_config_inner(
     file: &FileIR,
-    rules: &RuleSet,
+    rule_index: &ApplicableRuleIndex<'_>,
     cfg: &EngineConfig,
     mut metrics: Option<&mut EngineMetrics>,
 ) -> Vec<Finding> {
@@ -840,12 +937,8 @@ fn analyze_file_with_config_inner(
     } else {
         None
     };
-    let applicable_rules: Vec<&CompiledRule> = rules
-        .rules
-        .iter()
-        .filter(|rule| rule.applies_to(&file.file_type))
-        .collect();
-    for r in applicable_rules {
+    let applicable_rules = rule_index.rules_for(&file.file_type);
+    for r in applicable_rules.iter().copied() {
         if let Some(ft) = cfg.file_timeout {
             if start.elapsed() >= ft {
                 break;
@@ -893,12 +986,14 @@ pub fn analyze_file_with_config(
     metrics: Option<&mut EngineMetrics>,
 ) -> Vec<Finding> {
     dataflow::set_call_graph(dataflow::CallGraph::build(std::slice::from_ref(file)));
-    analyze_file_with_config_inner(file, rules, cfg, metrics)
+    let rule_index = ApplicableRuleIndex::new(rules);
+    analyze_file_with_config_inner(file, &rule_index, cfg, metrics)
 }
 
 pub fn analyze_file(file: &FileIR, rules: &RuleSet) -> Vec<Finding> {
     dataflow::set_call_graph(dataflow::CallGraph::build(std::slice::from_ref(file)));
-    analyze_file_inner(file, rules)
+    let rule_index = ApplicableRuleIndex::new(rules);
+    analyze_file_inner(file, &rule_index)
 }
 
 pub fn load_baseline(path: &Path) -> anyhow::Result<HashSet<BaselineEntry>> {
