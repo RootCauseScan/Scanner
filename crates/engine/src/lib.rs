@@ -692,25 +692,39 @@ fn analyze_file_inner(file: &FileIR, rule_index: &ApplicableRuleIndex<'_>) -> Ve
     findings
 }
 
+struct FileToAnalyze<'a> {
+    file: &'a FileIR,
+    hash: Option<String>,
+}
+
+struct FileAnalysisResult {
+    hash: Option<String>,
+    findings: Vec<Finding>,
+}
+
 fn analyze_files_inner(
-    files: &[(String, &FileIR)],
+    files: &[FileToAnalyze<'_>],
     rule_index: &ApplicableRuleIndex<'_>,
-) -> Vec<(String, Vec<Finding>)> {
+) -> Vec<FileAnalysisResult> {
     debug!(
         "analyze_files_inner: Starting file processing for {} files",
         files.len()
     );
-    let results: Vec<(String, Vec<Finding>)> = files
+    let results: Vec<FileAnalysisResult> = files
         .par_iter()
-        .map(|(h, f)| {
-            debug!("analyze_files_inner: Processing file '{}'", h);
-            let findings = analyze_file_inner(f, rule_index);
+        .map(|item| {
+            let display_id = item.hash.as_deref().unwrap_or(&item.file.file_path);
+            debug!("analyze_files_inner: Processing file '{}'", display_id);
+            let findings = analyze_file_inner(item.file, rule_index);
             debug!(
                 "analyze_files_inner: Completed processing file '{}', found {} findings",
-                h,
+                display_id,
                 findings.len()
             );
-            (h.clone(), findings)
+            FileAnalysisResult {
+                hash: item.hash.clone(),
+                findings,
+            }
         })
         .collect();
     debug!("analyze_files_inner: Completed file processing");
@@ -777,12 +791,24 @@ pub fn analyze_files_with_config(
     );
     let mut cached = Vec::new();
     let mut to_analyze = Vec::new();
-    for f in files {
-        let h = cache::hash_file(f);
-        if let Some(c) = cache.as_ref().and_then(|c| c.get(&h)) {
-            cached.extend(c.clone());
-        } else {
-            to_analyze.push((h, f));
+    if cache.is_some() {
+        for f in files {
+            let hash = cache::hash_file(f);
+            if let Some(cached_findings) = cache.as_ref().and_then(|c| c.get(&hash)) {
+                cached.extend(cached_findings.clone());
+            } else {
+                to_analyze.push(FileToAnalyze {
+                    file: f,
+                    hash: Some(hash),
+                });
+            }
+        }
+    } else {
+        for f in files {
+            to_analyze.push(FileToAnalyze {
+                file: f,
+                hash: None,
+            });
         }
     }
 
@@ -790,16 +816,20 @@ pub fn analyze_files_with_config(
         if cfg.file_timeout.is_none() && cfg.rule_timeout.is_none() && metrics.is_none() {
             analyze_files_inner(&to_analyze, &rule_index)
                 .into_iter()
-                .flat_map(|(h, fs)| {
-                    if let Some(c) = cache.as_deref_mut() {
-                        c.insert(h, fs.clone());
+                .flat_map(|result| {
+                    if let Some(hash) = result.hash.as_ref() {
+                        if let Some(c) = cache.as_deref_mut() {
+                            c.insert(hash.clone(), result.findings.clone());
+                        }
                     }
-                    fs.into_iter()
+                    result.findings.into_iter()
                 })
                 .collect()
         } else {
             let mut out = Vec::new();
-            for (idx, (h, f)) in to_analyze.into_iter().enumerate() {
+            for (idx, item) in to_analyze.into_iter().enumerate() {
+                let f = item.file;
+                let hash = item.hash;
                 debug!(
                     "Config analysis: processing file {}/{}: {}",
                     idx + 1,
@@ -809,7 +839,9 @@ pub fn analyze_files_with_config(
                 let mut res =
                     analyze_file_with_config_inner(f, &rule_index, cfg, metrics.as_deref_mut());
                 if let Some(c) = cache.as_deref_mut() {
-                    c.insert(h, res.clone());
+                    if let Some(hash_value) = hash.as_ref() {
+                        c.insert(hash_value.clone(), res.clone());
+                    }
                 }
                 out.append(&mut res);
             }
@@ -881,20 +913,25 @@ where
         if needs_call_graph {
             dataflow::set_call_graph(dataflow::CallGraph::build(std::slice::from_ref(&f)));
         }
-        let h = cache::hash_file(&f);
-        if let Some(c) = cache.as_ref().and_then(|c| c.get(&h)) {
-            findings.extend(c.clone());
-        } else {
-            let mut res =
-                analyze_file_with_config_inner(&f, &rule_index, cfg, metrics.as_deref_mut());
-            if cfg.suppress_comment.is_some() {
-                res.retain(|fi| !f.suppressed.contains(&fi.line));
+        let mut hash = None;
+        if let Some(cache_ref) = cache.as_ref() {
+            let computed = cache::hash_file(&f);
+            if let Some(cached_findings) = cache_ref.get(&computed) {
+                findings.extend(cached_findings.clone());
+                continue;
             }
-            if let Some(c) = cache.as_deref_mut() {
-                c.insert(h, res.clone());
-            }
-            findings.extend(res);
+            hash = Some(computed);
         }
+        let mut res = analyze_file_with_config_inner(&f, &rule_index, cfg, metrics.as_deref_mut());
+        if cfg.suppress_comment.is_some() {
+            res.retain(|fi| !f.suppressed.contains(&fi.line));
+        }
+        if let Some(c) = cache.as_deref_mut() {
+            if let Some(hash_value) = hash.as_ref() {
+                c.insert(hash_value.clone(), res.clone());
+            }
+        }
+        findings.extend(res);
     }
     debug!("Streaming analysis completed for {} files", count);
     if let Some(baseline) = &cfg.baseline {
