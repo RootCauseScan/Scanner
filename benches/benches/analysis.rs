@@ -107,6 +107,7 @@ fn bench_rule_timeout(c: &mut Criterion) {
                 black_box(&cfg),
                 None,
                 None,
+                None,
             )
         })
     });

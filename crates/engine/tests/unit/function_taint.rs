@@ -384,7 +384,7 @@ fn resets_between_scans() {
     record_function_taints(&f1).expect("record taints");
     assert!(get_function_taint("sink").is_some());
 
-    analyze_files_with_config(&[f2], &rules, &cfg, None, None);
+    analyze_files_with_config(&[f2], &rules, &cfg, None, None, None);
     assert!(get_function_taint("sink").is_none());
 }
 

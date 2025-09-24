@@ -55,6 +55,7 @@ fn reuses_cached_results() {
         &cfg,
         Some(&mut cache),
         Some(&mut m1),
+        None,
     );
     assert_eq!(first.len(), 1);
     assert_eq!(m1.file_times_ms.len(), 1);
@@ -62,7 +63,8 @@ fn reuses_cached_results() {
 
     let mut cache = AnalysisCache::load(&path);
     let mut m2 = EngineMetrics::default();
-    let second = analyze_files_with_config(&[file], &rules, &cfg, Some(&mut cache), Some(&mut m2));
+    let second =
+        analyze_files_with_config(&[file], &rules, &cfg, Some(&mut cache), Some(&mut m2), None);
     assert_eq!(second.len(), first.len());
     assert!(m2.file_times_ms.is_empty());
 }

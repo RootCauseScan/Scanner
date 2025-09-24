@@ -5,6 +5,7 @@ use std::collections::{hash_map::Entry, HashMap, HashSet};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use tracing::level_filters::LevelFilter;
 use tracing::{debug, error, info, warn};
 
@@ -528,7 +529,21 @@ maintainer = "RootCause Security Team <contact@rootcause.dev>"
     };
     let mut plugin_findings: Vec<Finding> = Vec::new();
     let start_time = std::time::Instant::now();
-    let total_files = files.len();
+    let mut total_files = files.len();
+    let progress = if args.quiet {
+        None
+    } else {
+        ui::ProgressBar::new(ruleset.rules.len(), total_files).map(|bar| Arc::new(Mutex::new(bar)))
+    };
+    let progress_callback: Option<Arc<dyn Fn(usize) + Send + Sync + 'static>> =
+        progress.as_ref().map(|handle| {
+            let handle = Arc::clone(handle);
+            Arc::new(move |completed: usize| {
+                if let Ok(mut bar) = handle.lock() {
+                    bar.increment_files(completed);
+                }
+            }) as Arc<dyn Fn(usize) + Send + Sync + 'static>
+        });
     let mut failed_files = 0usize;
     let mut file_cache: HashMap<PathBuf, Vec<u8>> = HashMap::new();
     let findings = if args.stream {
@@ -560,7 +575,17 @@ maintainer = "RootCause Security Team <contact@rootcause.dev>"
                             serde_json::to_string_pretty(&result).unwrap_or_default()
                         );
                     }
+                    let before = files.len();
                     update_files_from_transform(&mut files, &mut file_index, &result);
+                    let added = files.len().saturating_sub(before);
+                    if added > 0 {
+                        total_files += added;
+                        if let Some(pb) = &progress {
+                            if let Ok(mut guard) = pb.lock() {
+                                guard.extend_total_files(added);
+                            }
+                        }
+                    }
                 }
             }
             debug!("Transformers completed for file: {}", path.display());
@@ -637,6 +662,11 @@ maintainer = "RootCause Security Team <contact@rootcause.dev>"
                 None => {
                     debug!("File parsing failed for: {}", path.display());
                     failed_files += 1;
+                    if let Some(pb) = &progress {
+                        if let Ok(mut guard) = pb.lock() {
+                            guard.increment_files(1);
+                        }
+                    }
                 }
             }
             if let Some(&idx_f) = file_index.get(&path) {
@@ -658,6 +688,7 @@ maintainer = "RootCause Security Team <contact@rootcause.dev>"
             &cfg,
             cache_opt.as_deref_mut(),
             metrics_opt,
+            progress_callback.as_ref(),
         );
         engine::merge_plugin_findings(&parsed_files, findings, plugin_findings, &cfg)
     } else {
@@ -690,7 +721,17 @@ maintainer = "RootCause Security Team <contact@rootcause.dev>"
                             serde_json::to_string_pretty(&result).unwrap_or_default()
                         );
                     }
+                    let before = files.len();
                     update_files_from_transform(&mut files, &mut file_index, &result);
+                    let added = files.len().saturating_sub(before);
+                    if added > 0 {
+                        total_files += added;
+                        if let Some(pb) = &progress {
+                            if let Ok(mut guard) = pb.lock() {
+                                guard.extend_total_files(added);
+                            }
+                        }
+                    }
                 }
             }
             debug!("Transformers completed for file: {}", path.display());
@@ -788,7 +829,14 @@ maintainer = "RootCause Security Team <contact@rootcause.dev>"
                     files_ir.push(fir);
                     chunk_paths.push(path.clone());
                 }
-                None => failed_files += 1,
+                None => {
+                    failed_files += 1;
+                    if let Some(pb) = &progress {
+                        if let Ok(mut guard) = pb.lock() {
+                            guard.increment_files(1);
+                        }
+                    }
+                }
             }
 
             if files_ir.len() == args.chunk_size {
@@ -799,6 +847,7 @@ maintainer = "RootCause Security Team <contact@rootcause.dev>"
                     &cfg,
                     cache_opt.as_deref_mut(),
                     metrics_opt.as_deref_mut(),
+                    progress_callback.as_ref(),
                 );
                 findings_acc.extend(engine::merge_plugin_findings(
                     &files_ir,
@@ -827,6 +876,7 @@ maintainer = "RootCause Security Team <contact@rootcause.dev>"
                 &cfg,
                 cache_opt.as_deref_mut(),
                 metrics_opt.as_deref_mut(),
+                progress_callback.as_ref(),
             );
             findings_acc.extend(engine::merge_plugin_findings(
                 &files_ir,
@@ -844,6 +894,11 @@ maintainer = "RootCause Security Team <contact@rootcause.dev>"
         }
         findings_acc
     };
+    if let Some(pb) = &progress {
+        if let Ok(mut guard) = pb.lock() {
+            guard.finish();
+        }
+    }
     if let Some(path) = &cache_path {
         cache.save(path);
     }

@@ -144,7 +144,7 @@ pub fn analyze_files_cached(
     let mut findings = if analyze_files.is_empty() {
         Vec::new()
     } else {
-        analyze_files_with_config(&analyze_files, rules, cfg, None, metrics.take())
+        analyze_files_with_config(&analyze_files, rules, cfg, None, metrics.take(), None)
     };
 
     if !analyze_files.is_empty() {

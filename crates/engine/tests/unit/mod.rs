@@ -357,6 +357,7 @@ fn rule_timeout_yields_no_findings() {
         },
         None,
         None,
+        None,
     );
     assert_eq!(findings.len(), 0);
 }

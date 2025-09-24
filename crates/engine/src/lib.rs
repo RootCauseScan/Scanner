@@ -707,6 +707,7 @@ struct FileAnalysisResult {
 fn analyze_files_inner(
     files: &[FileToAnalyze<'_>],
     rule_index: &ApplicableRuleIndex<'_>,
+    progress: Option<&Arc<dyn Fn(usize) + Send + Sync + 'static>>,
 ) -> Vec<FileAnalysisResult> {
     debug!(
         "analyze_files_inner: Starting file processing for {} files",
@@ -723,6 +724,9 @@ fn analyze_files_inner(
                 display_id,
                 findings.len()
             );
+            if let Some(cb) = progress {
+                cb(1);
+            }
             FileAnalysisResult {
                 hash: item.hash.clone(),
                 findings,
@@ -738,7 +742,7 @@ pub fn analyze_files(
     rules: &RuleSet,
     cache: Option<&mut AnalysisCache>,
 ) -> Vec<Finding> {
-    analyze_files_with_config(files, rules, &EngineConfig::default(), cache, None)
+    analyze_files_with_config(files, rules, &EngineConfig::default(), cache, None, None)
 }
 
 #[derive(Debug, Clone, Default)]
@@ -782,6 +786,7 @@ pub fn analyze_files_with_config(
     cfg: &EngineConfig,
     mut cache: Option<&mut AnalysisCache>,
     mut metrics: Option<&mut EngineMetrics>,
+    progress: Option<&Arc<dyn Fn(usize) + Send + Sync + 'static>>,
 ) -> Vec<Finding> {
     configure_call_graph(files, rules);
     warmup_wasm_rules(rules);
@@ -816,7 +821,7 @@ pub fn analyze_files_with_config(
 
     let mut findings =
         if cfg.file_timeout.is_none() && cfg.rule_timeout.is_none() && metrics.is_none() {
-            analyze_files_inner(&to_analyze, &rule_index)
+            analyze_files_inner(&to_analyze, &rule_index, progress)
                 .into_iter()
                 .flat_map(|result| {
                     if let Some(hash) = result.hash.as_ref() {
@@ -844,6 +849,9 @@ pub fn analyze_files_with_config(
                     if let Some(hash_value) = hash.as_ref() {
                         c.insert(hash_value.clone(), res.clone());
                     }
+                }
+                if let Some(cb) = progress {
+                    cb(1);
                 }
                 out.append(&mut res);
             }
@@ -890,6 +898,7 @@ pub fn analyze_files_streaming<I>(
     cfg: &EngineConfig,
     mut cache: Option<&mut AnalysisCache>,
     mut metrics: Option<&mut EngineMetrics>,
+    progress: Option<&Arc<dyn Fn(usize) + Send + Sync + 'static>>,
 ) -> Vec<Finding>
 where
     I: IntoIterator<Item = FileIR>,
@@ -934,6 +943,9 @@ where
             }
         }
         findings.extend(res);
+        if let Some(cb) = progress {
+            cb(1);
+        }
     }
     debug!("Streaming analysis completed for {} files", count);
     if let Some(baseline) = &cfg.baseline {

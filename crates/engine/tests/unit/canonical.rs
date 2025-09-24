@@ -347,6 +347,7 @@ fn metrics_capture_cache_usage() -> anyhow::Result<()> {
         &EngineConfig::default(),
         None,
         Some(&mut metrics),
+        None,
     );
 
     // On Windows, metrics may not be captured correctly

@@ -106,7 +106,7 @@ fn baseline_filters_by_file_and_line() {
         baseline: Some(set),
         suppress_comment: None,
     };
-    let res = analyze_files_with_config(&[file.clone()], &rules, &cfg, None, None);
+    let res = analyze_files_with_config(&[file.clone()], &rules, &cfg, None, None, None);
     assert!(res.is_empty());
     let mut entry2 = entry.clone();
     entry2.line += 1;
@@ -118,6 +118,6 @@ fn baseline_filters_by_file_and_line() {
         baseline: Some(set2),
         suppress_comment: None,
     };
-    let res2 = analyze_files_with_config(&[file], &rules, &cfg2, None, None);
+    let res2 = analyze_files_with_config(&[file], &rules, &cfg2, None, None, None);
     assert_eq!(res2.len(), 1);
 }

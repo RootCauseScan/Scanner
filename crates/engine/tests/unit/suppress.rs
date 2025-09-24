@@ -58,7 +58,7 @@ fn suppression_lines_are_respected() {
         suppress_comment: Some("#skip".into()),
         ..Default::default()
     };
-    let findings = analyze_files_with_config(&[fir], &rules, &cfg, None, None);
+    let findings = analyze_files_with_config(&[fir], &rules, &cfg, None, None, None);
     assert_eq!(findings.len(), 1);
     assert_eq!(findings[0].line, 1);
 }

@@ -95,6 +95,7 @@ fn analyzes_without_cache() {
         &EngineConfig::default(),
         None,
         None,
+        None,
     );
     assert_eq!(findings.len(), 1);
     assert_eq!(findings[0].rule_id, "r1");
@@ -103,6 +104,7 @@ fn analyzes_without_cache() {
         vec![file.clone()],
         &rules,
         &EngineConfig::default(),
+        None,
         None,
         None,
     );

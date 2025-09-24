@@ -30,7 +30,8 @@ fn stream_matches_batch() {
         languages: vec!["k8s".into()],
     });
     let batch = analyze_files(&[file.clone()], &rules, None);
-    let stream = analyze_files_streaming(vec![file], &rules, &EngineConfig::default(), None, None);
+    let stream =
+        analyze_files_streaming(vec![file], &rules, &EngineConfig::default(), None, None, None);
     assert_eq!(batch.len(), stream.len());
     assert_eq!(batch[0].rule_id, stream[0].rule_id);
 }
@@ -62,7 +63,7 @@ fn stream_no_findings_on_non_matching_input() {
         languages: vec!["k8s".into()],
     });
     let findings =
-        analyze_files_streaming(vec![file], &rules, &EngineConfig::default(), None, None);
+        analyze_files_streaming(vec![file], &rules, &EngineConfig::default(), None, None, None);
     assert!(findings.is_empty());
 }
 
@@ -91,7 +92,8 @@ fn stream_memory_stable() {
     let rules = RuleSet::default();
     let start_mem = current_rss();
     let files = (0..500).map(|_| mk_file_ir(vec![]));
-    let findings = analyze_files_streaming(files, &rules, &EngineConfig::default(), None, None);
+    let findings =
+        analyze_files_streaming(files, &rules, &EngineConfig::default(), None, None, None);
     assert!(findings.is_empty());
     let end_mem = current_rss();
     let diff = end_mem.saturating_sub(start_mem);
