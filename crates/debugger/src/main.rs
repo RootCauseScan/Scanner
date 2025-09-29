@@ -1,10 +1,9 @@
+use std::fs;
 use std::path::PathBuf;
 
 use anyhow::{anyhow, Result};
-use clap::{Parser, Subcommand, ValueEnum};
-use debugger::{EventFormat, FormatterSink};
-use engine::{build_cfg, load_rules_with_events, parse_file_with_events, set_debug_sink};
-use parsers::build_dfg;
+use clap::{Args, Parser, Subcommand, ValueEnum};
+use debugger::{callgraph, taint, DebugToolkit, EventFormat, Format};
 
 #[derive(Parser)]
 #[command(name = "debugger")]
@@ -12,6 +11,19 @@ use parsers::build_dfg;
 struct Cli {
     #[command(subcommand)]
     command: Commands,
+}
+
+#[derive(Args, Clone, Default)]
+struct TimelineOpts {
+    #[arg(
+        long,
+        value_enum,
+        help = "Show the engine timeline in the selected format",
+        value_name = "FORMAT"
+    )]
+    timeline: Option<EventFormat>,
+    #[arg(long, help = "Show a compact per-stage summary of collected events")]
+    timeline_summary: bool,
 }
 
 #[derive(Subcommand)]
@@ -26,6 +38,11 @@ enum Commands {
         /// Representation to export
         #[arg(long, value_enum, default_value_t = Kind::Ast)]
         kind: Kind,
+        /// Simplified output for presentations
+        #[arg(long)]
+        simplified: bool,
+        #[command(flatten)]
+        timeline: TimelineOpts,
     },
     /// Shows a compiled rule from a file
     Rule {
@@ -34,15 +51,35 @@ enum Commands {
         /// Output format
         #[arg(long, value_enum, default_value_t = Format::Text)]
         format: Format,
+        #[command(flatten)]
+        timeline: TimelineOpts,
     },
-}
-
-#[derive(Copy, Clone, ValueEnum)]
-enum Format {
-    Text,
-    Json,
-    Dot,
-    Mermaid,
+    /// Taint analysis - inspects the engine taint model for a file
+    Taint {
+        /// Path to the file to process
+        file: PathBuf,
+        /// Output format
+        #[arg(long, value_enum, default_value_t = Format::Text)]
+        format: Format,
+        /// Show detailed taint flow
+        #[arg(long)]
+        detailed: bool,
+        #[command(flatten)]
+        timeline: TimelineOpts,
+    },
+    /// Call graph analysis derived from the IR
+    Callgraph {
+        /// Path to the file or directory to process
+        path: PathBuf,
+        /// Output format
+        #[arg(long, value_enum, default_value_t = Format::Text)]
+        format: Format,
+        /// Show only direct calls
+        #[arg(long)]
+        direct_only: bool,
+        #[command(flatten)]
+        timeline: TimelineOpts,
+    },
 }
 
 #[derive(Copy, Clone, ValueEnum)]
@@ -50,102 +87,164 @@ enum Kind {
     Ast,
     Cfg,
     Ssa,
+    Callgraph,
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    let toolkit = DebugToolkit::new();
+
     match cli.command {
-        Commands::Ir { file, format, kind } => {
-            let sink = FormatterSink::new(match format {
-                Format::Json => EventFormat::Json,
-                _ => EventFormat::Text,
-            });
-            set_debug_sink(Some(Box::new(sink.clone())));
-            show_ir(file, format, kind)?;
-            println!("{}", sink.output());
-            set_debug_sink(None);
-        }
-        Commands::Rule { file, format } => {
-            let sink = FormatterSink::new(match format {
-                Format::Json => EventFormat::Json,
-                _ => EventFormat::Text,
-            });
-            set_debug_sink(Some(Box::new(sink.clone())));
-            show_rule(file, format)?;
-            println!("{}", sink.output());
-            set_debug_sink(None);
-        }
+        Commands::Ir {
+            file,
+            format,
+            kind,
+            simplified,
+            timeline,
+        } => run_ir(&toolkit, file, format, kind, simplified, &timeline)?,
+        Commands::Rule {
+            file,
+            format,
+            timeline,
+        } => run_rule(&toolkit, file, format, &timeline)?,
+        Commands::Taint {
+            file,
+            format,
+            detailed,
+            timeline,
+        } => run_taint(&toolkit, file, format, detailed, &timeline)?,
+        Commands::Callgraph {
+            path,
+            format,
+            direct_only,
+            timeline,
+        } => run_callgraph(&toolkit, path, format, direct_only, &timeline)?,
     }
     Ok(())
 }
 
-fn show_ir(path: PathBuf, format: Format, kind: Kind) -> Result<()> {
-    let mut fir = parse_file_with_events(&path, None, None)?
-        .ok_or_else(|| anyhow!("unsupported file type"))?;
-    match kind {
-        Kind::Ast => {
-            let ast = fir
-                .ast
-                .as_ref()
-                .ok_or_else(|| anyhow!("AST not available"))?;
-            match format {
-                Format::Text => println!("{ast:#?}"),
-                Format::Json => println!("{}", ast.to_json()?),
-                Format::Dot => println!("{}", ast.to_dot()),
-                Format::Mermaid => println!("{}", ast.to_mermaid()),
-            }
+fn run_ir(
+    toolkit: &DebugToolkit,
+    file: PathBuf,
+    format: Format,
+    kind: Kind,
+    simplified: bool,
+    timeline: &TimelineOpts,
+) -> Result<()> {
+    toolkit.reset();
+    let inspection = toolkit.inspect_file(&file)?;
+    let rendered = match kind {
+        Kind::Ast => inspection.format_ast(format, simplified)?,
+        Kind::Cfg => inspection.format_cfg(format)?,
+        Kind::Ssa => inspection.format_dfg(format)?,
+        Kind::Callgraph => {
+            let fir = inspection.borrow();
+            let analysis = callgraph::analyze_callgraph(&[fir.clone()], false)?;
+            callgraph::format_callgraph_analysis(&analysis, format)
         }
-        Kind::Cfg => {
-            let cfg = build_cfg(&fir).ok_or_else(|| anyhow!("CFG not available"))?;
-            match format {
-                Format::Text => println!("{cfg:#?}"),
-                Format::Json => println!("{}", cfg.to_json()?),
-                Format::Dot => println!("{}", cfg.to_dot()),
-                Format::Mermaid => println!("{}", cfg.to_mermaid()),
-            }
-        }
-        Kind::Ssa => {
-            build_dfg(&mut fir)?;
-            let dfg = fir
-                .dfg
-                .as_ref()
-                .ok_or_else(|| anyhow!("DFG not available"))?;
-            match format {
-                Format::Text => println!("{dfg:#?}"),
-                Format::Json => println!("{}", dfg.to_json()?),
-                Format::Dot => println!("{}", dfg.to_dot()),
-                Format::Mermaid => println!("{}", dfg.to_mermaid()),
-            }
-        }
-    }
+    };
+    println!("{}", rendered);
+    emit_timeline(toolkit, timeline);
     Ok(())
 }
 
-fn show_rule(path: PathBuf, format: Format) -> Result<()> {
-    let rs = load_rules_with_events(&path)?;
-    let rule = rs.rules.first().ok_or_else(|| anyhow!("no rule found"))?;
-    match format {
-        Format::Text => {
-            println!("{rule:#?}");
+fn run_rule(
+    toolkit: &DebugToolkit,
+    file: PathBuf,
+    format: Format,
+    timeline: &TimelineOpts,
+) -> Result<()> {
+    toolkit.reset();
+    let inspection = toolkit.inspect_rules(&file)?;
+    let rendered = inspection.render(format)?;
+    println!("{}", rendered);
+    emit_timeline(toolkit, timeline);
+    Ok(())
+}
+
+fn run_taint(
+    toolkit: &DebugToolkit,
+    file: PathBuf,
+    format: Format,
+    detailed: bool,
+    timeline: &TimelineOpts,
+) -> Result<()> {
+    toolkit.reset();
+    let inspection = toolkit.inspect_file(&file)?;
+    let fir = inspection.borrow();
+    let analysis = taint::analyze_taint(&fir, detailed)?;
+    drop(fir);
+    let rendered = taint::format_taint_analysis(&analysis, format);
+    println!("{}", rendered);
+    emit_timeline(toolkit, timeline);
+    Ok(())
+}
+
+fn run_callgraph(
+    toolkit: &DebugToolkit,
+    path: PathBuf,
+    format: Format,
+    direct_only: bool,
+    timeline: &TimelineOpts,
+) -> Result<()> {
+    toolkit.reset();
+    let mut files = Vec::new();
+
+    if path.is_file() {
+        if let Some(fir) = toolkit.parse_raw(&path)? {
+            files.push(fir);
         }
-        Format::Json => {
-            let json = serde_json::json!({
-                "id": rule.id,
-                "severity": rule.severity,
-                "category": rule.category,
-                "message": rule.message,
-                "remediation": rule.remediation,
-                "interfile": rule.interfile,
-                "matcher": format!("{matcher:?}", matcher = rule.matcher),
-            });
-            println!("{}", serde_json::to_string_pretty(&json)?);
+    } else if path.is_dir() {
+        for entry in fs::read_dir(&path)? {
+            let entry = entry?;
+            let file_path = entry.path();
+            if file_path.is_file() {
+                if let Some(fir) = toolkit.parse_raw(&file_path)? {
+                    files.push(fir);
+                }
+            }
         }
-        Format::Dot => {
-            println!("digraph Rule {{ label=\"{}\" }}", rule.id);
-        }
-        Format::Mermaid => {
-            println!("graph TD\n    rule[\"{}\"]", rule.id);
+    } else {
+        return Err(anyhow!("path does not exist: {}", path.display()));
+    }
+
+    if files.is_empty() {
+        return Err(anyhow!("no supported files found"));
+    }
+
+    let analysis = callgraph::analyze_callgraph(&files, direct_only)?;
+    let rendered = callgraph::format_callgraph_analysis(&analysis, format);
+    println!("{}", rendered);
+    emit_timeline(toolkit, timeline);
+    Ok(())
+}
+
+fn emit_timeline(toolkit: &DebugToolkit, opts: &TimelineOpts) {
+    if opts.timeline.is_none() && !opts.timeline_summary {
+        return;
+    }
+
+    let timeline = toolkit.timeline();
+    if timeline.events.is_empty() {
+        println!();
+        println!("(no engine events were captured for this run)");
+        return;
+    }
+
+    println!();
+    if let Some(format) = opts.timeline {
+        println!("=== Pipeline Timeline ===");
+        match format {
+            EventFormat::Text => print!("{}", timeline.to_text()),
+            EventFormat::Json => println!("{}", timeline.to_json_string()),
+            EventFormat::Mermaid => println!("{}", timeline.to_mermaid()),
         }
     }
-    Ok(())
+
+    if opts.timeline_summary {
+        println!("=== Pipeline Summary ===");
+        for summary in timeline.stage_summary() {
+            println!("- {}: {}", summary.stage, summary.count);
+        }
+    }
 }
