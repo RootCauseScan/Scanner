@@ -115,14 +115,24 @@ fn find_ident(node: &AstNode, src: &str, target: &str) -> bool {
 fn extract_ident(node: &AstNode, src: &str) -> String {
     let line = node.meta.line;
     let col = node.meta.column;
-    if let Some(text) = src.lines().nth(line - 1) {
-        let start = col - 1;
-        let ident: String = text[start..]
-            .chars()
-            .take_while(|c| c.is_alphanumeric() || *c == '_')
-            .collect();
-        ident
-    } else {
-        String::new()
+
+    if line == 0 || col == 0 {
+        return String::new();
     }
+
+    let Some(text) = src.lines().nth(line.saturating_sub(1)) else {
+        return String::new();
+    };
+
+    let start_col = col.saturating_sub(1);
+    let mut indices = text.char_indices();
+    let (start_idx, _) = match indices.nth(start_col) {
+        Some(pair) => pair,
+        None => return String::new(),
+    };
+
+    text[start_idx..]
+        .chars()
+        .take_while(|c| c.is_alphanumeric() || *c == '_')
+        .collect()
 }
