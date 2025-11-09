@@ -15,7 +15,7 @@ use crate::output::{self, Format};
 use crate::{default_excludes, is_excluded, load_ignore_patterns, ui};
 
 use engine::plugin::PluginManager;
-use engine::{AnalysisCache, Finding};
+use engine::{rules_fingerprint, AnalysisCache, Finding};
 use ir::FileIR;
 use loader::{visit, Severity};
 use plugin_core::{discover_plugins, FileSpec, RepoDiscoverParams};
@@ -522,6 +522,11 @@ maintainer = "RootCause Security Team <contact@rootcause.dev>"
     } else {
         AnalysisCache::default()
     };
+    let current_rules_hash = rules_fingerprint(&ruleset);
+    if cache.rules_hash() != Some(current_rules_hash.as_str()) {
+        cache.clear();
+    }
+    cache.set_rules_hash(current_rules_hash);
     let mut cache_opt = if cache_path.is_some() {
         Some(&mut cache)
     } else {

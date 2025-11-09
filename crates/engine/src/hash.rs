@@ -1,4 +1,4 @@
-use blake3::hash;
+use blake3::{hash, Hasher};
 use ir::FileIR;
 use loader::{CompiledRule, RuleSet};
 use serde::{Deserialize, Serialize};
@@ -102,8 +102,25 @@ impl HashCache {
     }
 }
 
-fn hash_rule(rule: &CompiledRule) -> String {
+pub fn hash_rule(rule: &CompiledRule) -> String {
     hash(format!("{rule:?}").as_bytes()).to_hex().to_string()
+}
+
+pub fn rules_fingerprint(rules: &RuleSet) -> String {
+    let mut hasher = Hasher::new();
+    let mut entries: Vec<(&String, String)> = rules
+        .rules
+        .iter()
+        .map(|rule| (&rule.id, hash_rule(rule)))
+        .collect();
+    entries.sort_by(|(id_a, _), (id_b, _)| id_a.cmp(id_b));
+    for (id, hash) in entries {
+        hasher.update(id.as_bytes());
+        hasher.update(b"\0");
+        hasher.update(hash.as_bytes());
+        hasher.update(b"\0");
+    }
+    hasher.finalize().to_hex().to_string()
 }
 
 /// Analyses files using a hash-based cache.

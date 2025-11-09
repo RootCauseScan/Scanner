@@ -138,7 +138,7 @@ pub fn find_taint_path(fir: &FileIR, _source: &str, _sink: &str) -> Option<Vec<u
     None
 }
 
-pub use hash::analyze_files_cached;
+pub use hash::{analyze_files_cached, rules_fingerprint};
 
 static RAYON_POOL: OnceLock<rayon::ThreadPool> = OnceLock::new();
 
@@ -791,6 +791,14 @@ pub fn analyze_files_with_config(
     configure_call_graph(files, rules);
     warmup_wasm_rules(rules);
     let rule_index = ApplicableRuleIndex::new(rules);
+    let rules_hash = if cache.is_some() {
+        Some(hash::rules_fingerprint(rules))
+    } else {
+        None
+    };
+    if let (Some(cache_ref), Some(hash)) = (cache.as_deref_mut(), rules_hash.as_ref()) {
+        cache_ref.set_rules_hash(hash.clone());
+    }
     debug!(
         "Starting analysis with config of {} files with {} rules",
         files.len(),
@@ -825,8 +833,10 @@ pub fn analyze_files_with_config(
                 .into_iter()
                 .flat_map(|result| {
                     if let Some(hash) = result.hash.as_ref() {
-                        if let Some(c) = cache.as_deref_mut() {
-                            c.insert(hash.clone(), result.findings.clone());
+                        if let Some(rules_hash) = rules_hash.as_deref() {
+                            if let Some(c) = cache.as_deref_mut() {
+                                c.insert(hash.clone(), result.findings.clone(), rules_hash);
+                            }
                         }
                     }
                     result.findings.into_iter()
@@ -845,9 +855,11 @@ pub fn analyze_files_with_config(
                 );
                 let mut res =
                     analyze_file_with_config_inner(f, &rule_index, cfg, metrics.as_deref_mut());
-                if let Some(c) = cache.as_deref_mut() {
-                    if let Some(hash_value) = hash.as_ref() {
-                        c.insert(hash_value.clone(), res.clone());
+                if let Some(rules_hash) = rules_hash.as_deref() {
+                    if let Some(c) = cache.as_deref_mut() {
+                        if let Some(hash_value) = hash.as_ref() {
+                            c.insert(hash_value.clone(), res.clone(), rules_hash);
+                        }
                     }
                 }
                 if let Some(cb) = progress {
@@ -909,6 +921,14 @@ where
     }
     warmup_wasm_rules(rules);
     let rule_index = ApplicableRuleIndex::new(rules);
+    let rules_hash = if cache.is_some() {
+        Some(hash::rules_fingerprint(rules))
+    } else {
+        None
+    };
+    if let (Some(cache_ref), Some(hash)) = (cache.as_deref_mut(), rules_hash.as_ref()) {
+        cache_ref.set_rules_hash(hash.clone());
+    }
     let mut findings = Vec::new();
     debug!(
         "Starting streaming analysis with {} rules",
@@ -937,9 +957,11 @@ where
         if cfg.suppress_comment.is_some() {
             res.retain(|fi| !f.suppressed.contains(&fi.line));
         }
-        if let Some(c) = cache.as_deref_mut() {
-            if let Some(hash_value) = hash.as_ref() {
-                c.insert(hash_value.clone(), res.clone());
+        if let Some(rules_hash) = rules_hash.as_deref() {
+            if let Some(c) = cache.as_deref_mut() {
+                if let Some(hash_value) = hash.as_ref() {
+                    c.insert(hash_value.clone(), res.clone(), rules_hash);
+                }
             }
         }
         findings.extend(res);

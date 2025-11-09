@@ -12,6 +12,8 @@ use ir::FileIR;
 #[derive(Default, Serialize, Deserialize)]
 pub struct AnalysisCache {
     entries: HashMap<String, Vec<Finding>>,
+    #[serde(default)]
+    rules_hash: Option<String>,
 }
 
 impl AnalysisCache {
@@ -33,8 +35,21 @@ impl AnalysisCache {
         self.entries.get(key)
     }
 
-    pub fn insert(&mut self, key: String, findings: Vec<Finding>) {
+    pub fn insert(&mut self, key: String, findings: Vec<Finding>, rules_hash: &str) {
+        self.rules_hash = Some(rules_hash.to_owned());
         self.entries.insert(key, findings);
+    }
+
+    pub fn clear(&mut self) {
+        self.entries.clear();
+    }
+
+    pub fn rules_hash(&self) -> Option<&str> {
+        self.rules_hash.as_deref()
+    }
+
+    pub fn set_rules_hash(&mut self, hash: String) {
+        self.rules_hash = Some(hash);
     }
 }
 
