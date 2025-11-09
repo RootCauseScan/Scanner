@@ -565,8 +565,36 @@ fn display_rule_details(rule: &CompiledRule, index: usize, total: usize) {
 fn scan_rule_files(path: &Path) -> Result<(Vec<String>, Vec<String>)> {
     let mut rule_files = Vec::new();
     let mut invalid_files = Vec::new();
+
+    fn is_rule_artifact(file_path: &Path) -> bool {
+        matches!(
+            file_path.extension().and_then(|ext| ext.to_str()),
+            Some("yaml" | "yml" | "json" | "wasm")
+        )
+    }
+
+    fn push_relative(
+        file_path: &Path,
+        base: &Path,
+        rule_files: &mut Vec<String>,
+        invalid_files: &mut Vec<String>,
+    ) {
+        let relative_path = file_path
+            .strip_prefix(base)
+            .unwrap_or(file_path)
+            .to_string_lossy()
+            .to_string();
+
+        if is_rule_artifact(file_path) {
+            rule_files.push(relative_path);
+        } else {
+            invalid_files.push(relative_path);
+        }
+    }
+
     fn scan_recursive(
         dir: &Path,
+        base: &Path,
         rule_files: &mut Vec<String>,
         invalid_files: &mut Vec<String>,
     ) -> Result<()> {
@@ -574,58 +602,40 @@ fn scan_rule_files(path: &Path) -> Result<(Vec<String>, Vec<String>)> {
             let entry = entry?;
             let file_path = entry.path();
             if file_path.is_file() {
-                if let Some(ext) = file_path.extension() {
-                    if ext == "yaml" || ext == "yml" {
-                        let relative_path = file_path
-                            .strip_prefix(dir.parent().unwrap_or(Path::new("")))
-                            .unwrap_or(&file_path)
-                            .to_string_lossy()
-                            .to_string();
-                        rule_files.push(relative_path);
-                    } else {
-                        let relative_path = file_path
-                            .strip_prefix(dir.parent().unwrap_or(Path::new("")))
-                            .unwrap_or(&file_path)
-                            .to_string_lossy()
-                            .to_string();
-                        invalid_files.push(relative_path);
-                    }
-                }
-            } else if file_path.is_dir() {
-                // Excluir la carpeta .git
-                if file_path
+                push_relative(&file_path, base, rule_files, invalid_files);
+            } else if file_path.is_dir()
+                && file_path
                     .file_name()
                     .and_then(|name| name.to_str())
                     .map(|name| name != ".git")
                     .unwrap_or(true)
-                {
-                    scan_recursive(&file_path, rule_files, invalid_files)?;
-                }
+            {
+                scan_recursive(&file_path, base, rule_files, invalid_files)?;
             }
         }
         Ok(())
     }
+
     if path.is_dir() {
-        scan_recursive(path, &mut rule_files, &mut invalid_files)?;
+        scan_recursive(path, path, &mut rule_files, &mut invalid_files)?;
     } else if path.is_file() {
-        if let Some(ext) = path.extension() {
-            if ext == "yaml" || ext == "yml" {
-                let file_name = path
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("unknown")
-                    .to_string();
-                rule_files.push(file_name);
-            } else {
-                let file_name = path
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("unknown")
-                    .to_string();
-                invalid_files.push(file_name);
-            }
+        if is_rule_artifact(path) {
+            let file_name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("unknown")
+                .to_string();
+            rule_files.push(file_name);
+        } else {
+            let file_name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("unknown")
+                .to_string();
+            invalid_files.push(file_name);
         }
     }
+
     Ok((rule_files, invalid_files))
 }
 
