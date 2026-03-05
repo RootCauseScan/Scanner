@@ -4,6 +4,7 @@ use std::path::{Component, Path};
 use anyhow::{Context, Result};
 use plugin_core::{FileSpec, RepoDiscoverParams, RepoDiscoverResult};
 use serde::de::DeserializeOwned;
+use serde_json::Value;
 
 use super::proc_plugin::ProcPlugin;
 
@@ -122,6 +123,17 @@ impl ManagedPlugin {
     pub fn discover(&self, params: RepoDiscoverParams) -> Result<RepoDiscoverResult> {
         self.plugin
             .discover(params)
+            .with_context(|| format!("plugin {}", self.name))
+    }
+
+    /// Executes `scan.report` on the managed plugin.
+    pub fn report<R: DeserializeOwned>(
+        &self,
+        findings: Value,
+        metrics: Value,
+    ) -> Result<R> {
+        self.plugin
+            .report(findings, metrics)
             .with_context(|| format!("plugin {}", self.name))
     }
 }

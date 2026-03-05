@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
 use plugin_core::discover_plugins;
@@ -12,36 +13,39 @@ use super::managed::ManagedPlugin;
 use super::proc_plugin::ProcPlugin;
 
 /// Coordinates loaded plugins and exposes collections by type.
+/// A plugin with multiple capabilities is a single process; the same instance
+/// is used in each phase (discover, transform, analyze, report).
 #[derive(Default)]
 pub struct PluginManager {
-    transformers: Vec<ManagedPlugin>,
-    analyzers: Vec<ManagedPlugin>,
-    reporters: Vec<ManagedPlugin>,
-    discoverers: Vec<ManagedPlugin>,
+    transformers: Vec<Arc<ManagedPlugin>>,
+    analyzers: Vec<Arc<ManagedPlugin>>,
+    reporters: Vec<Arc<ManagedPlugin>>,
+    discoverers: Vec<Arc<ManagedPlugin>>,
 }
 
 impl PluginManager {
     /// Transformation plugins that run before parsing.
-    pub fn transformers(&self) -> &[ManagedPlugin] {
+    pub fn transformers(&self) -> &[Arc<ManagedPlugin>] {
         &self.transformers
     }
 
     /// Analysis plugins that run after generating the IR.
-    pub fn analyzers(&self) -> &[ManagedPlugin] {
+    pub fn analyzers(&self) -> &[Arc<ManagedPlugin>] {
         &self.analyzers
     }
 
     /// Plugins that run after analysis to report findings.
-    pub fn reporters(&self) -> &[ManagedPlugin] {
+    pub fn reporters(&self) -> &[Arc<ManagedPlugin>] {
         &self.reporters
     }
 
     /// Repository discovery plugins.
-    pub fn discoverers(&self) -> &[ManagedPlugin] {
+    pub fn discoverers(&self) -> &[Arc<ManagedPlugin>] {
         &self.discoverers
     }
 
     /// Loads plugins from the specified directories.
+    /// One process per plugin; that process is registered for every capability it declares.
     pub fn load(
         explicit: &[PathBuf],
         opts: &HashMap<String, Value>,
@@ -73,7 +77,6 @@ impl PluginManager {
             };
             let concurrency = info.manifest.concurrency.as_deref().unwrap_or("single");
 
-            // Use empty object as default plugin options to satisfy schemas expecting an object.
             let options = info
                 .manifest
                 .name
@@ -85,65 +88,69 @@ impl PluginManager {
             let needs_content = info.manifest.needs_content.unwrap_or(false);
             let reads_fs = info.manifest.reads_fs.unwrap_or(false);
 
-            // Helper to spawn a plugin for a given capability.
-            let create_plugin = |cap: &str| -> Result<Option<ManagedPlugin>> {
-                if info.manifest.capabilities.iter().any(|c| c == cap) {
-                    let limits = Limits {
-                        cpu_ms: info.manifest.timeout_ms,
-                        mem_mb: info.manifest.mem_mb,
-                    };
-                    // Canonicalize roots to ensure plugins receive absolute, stable paths.
-                    let ws_root_abs = if reads_fs {
-                        workspace_root
-                            .canonicalize()
-                            .unwrap_or_else(|_| workspace_root.to_path_buf())
-                    } else {
-                        PathBuf::from("/")
-                    };
-                    let rules_root_abs = if reads_fs {
-                        rules_root
-                            .canonicalize()
-                            .unwrap_or_else(|_| rules_root.to_path_buf())
-                    } else {
-                        PathBuf::from("/")
-                    };
+            let has_any = info.manifest.capabilities.iter().any(|c| {
+                matches!(c.as_str(), "transform" | "analyze" | "report" | "discover")
+            });
+            if !has_any {
+                continue;
+            }
 
-                    let (plugin, plugin_version) = ProcPlugin::new(
-                        &cmd_path,
-                        args,
-                        concurrency,
-                        limits,
-                        options.clone(),
-                        &ws_root_abs,
-                        &rules_root_abs,
-                        &info.manifest.capabilities,
-                        &info.path,
-                        plugin_name,
-                    )?;
-                    info!(name = plugin_name, capability = cap, version = %plugin_version, "Plugin initialized");
-                    Ok(Some(ManagedPlugin::new(
-                        plugin,
-                        needs_content,
-                        reads_fs,
-                        plugin_name.to_string(),
-                        plugin_version,
-                    )))
-                } else {
-                    Ok(None)
-                }
+            let limits = Limits {
+                cpu_ms: info.manifest.timeout_ms,
+                mem_mb: info.manifest.mem_mb,
+            };
+            let ws_root_abs = if reads_fs {
+                workspace_root
+                    .canonicalize()
+                    .unwrap_or_else(|_| workspace_root.to_path_buf())
+            } else {
+                PathBuf::from("/")
+            };
+            let rules_root_abs = if reads_fs {
+                rules_root
+                    .canonicalize()
+                    .unwrap_or_else(|_| rules_root.to_path_buf())
+            } else {
+                PathBuf::from("/")
             };
 
-            if let Some(plugin) = create_plugin("transform")? {
-                transformers.push(plugin);
+            let (plugin, plugin_version) = ProcPlugin::new(
+                &cmd_path,
+                args,
+                concurrency,
+                limits,
+                options,
+                &ws_root_abs,
+                &rules_root_abs,
+                &info.manifest.capabilities,
+                &info.path,
+                plugin_name,
+            )?;
+            info!(
+                name = plugin_name,
+                capabilities = ?info.manifest.capabilities,
+                version = %plugin_version,
+                "Plugin initialized (single process for all capabilities)"
+            );
+            let managed = Arc::new(ManagedPlugin::new(
+                plugin,
+                needs_content,
+                reads_fs,
+                plugin_name.to_string(),
+                plugin_version,
+            ));
+
+            if info.manifest.capabilities.iter().any(|c| c == "transform") {
+                transformers.push(Arc::clone(&managed));
             }
-            if let Some(plugin) = create_plugin("analyze")? {
-                analyzers.push(plugin);
+            if info.manifest.capabilities.iter().any(|c| c == "analyze") {
+                analyzers.push(Arc::clone(&managed));
             }
-            if let Some(plugin) = create_plugin("report")? {
-                reporters.push(plugin);
+            if info.manifest.capabilities.iter().any(|c| c == "report") {
+                reporters.push(Arc::clone(&managed));
             }
-            if let Some(plugin) = create_plugin("discover")? {
-                discoverers.push(plugin);
+            if info.manifest.capabilities.iter().any(|c| c == "discover") {
+                discoverers.push(Arc::clone(&managed));
             }
         }
 

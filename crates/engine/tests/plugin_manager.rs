@@ -283,11 +283,25 @@ timeout_ms = 5000
     )
     .unwrap();
 
-    assert_eq!(pm.transformers().len(), 1);
-    assert_eq!(pm.analyzers().len(), 1);
-    assert_eq!(pm.reporters().len(), 1);
-    assert!(!pm.transformers()[0].needs_content());
-    assert!(pm.analyzers()[0].needs_content());
+    // Resolve by name so the test works even when other plugins exist in the workspace
+    let transformer = pm
+        .transformers()
+        .iter()
+        .find(|p| p.name() == "decodebase64")
+        .expect("decodebase64 transformer loaded");
+    let analyzer = pm
+        .analyzers()
+        .iter()
+        .find(|p| p.name() == "echo")
+        .expect("echo analyzer loaded");
+    let _reporter = pm
+        .reporters()
+        .iter()
+        .find(|p| p.name() == "reporter")
+        .expect("reporter plugin loaded");
+
+    assert!(!transformer.needs_content());
+    assert!(analyzer.needs_content());
 
     // Transform plugin should read from filesystem
     const INNER_B64: &str = "QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFB";
@@ -297,7 +311,7 @@ timeout_ms = 5000
         path: file_path.to_string_lossy().into_owned(),
         ..Default::default()
     };
-    let out: Value = pm.transformers()[0].transform(vec![file]).unwrap();
+    let out: Value = transformer.transform(vec![file]).unwrap();
     assert_eq!(out["files"][0]["content_b64"], INNER_B64);
 
     // Analyzer plugin should receive content
@@ -307,11 +321,11 @@ timeout_ms = 5000
         path: file_path2.to_string_lossy().into_owned(),
         ..Default::default()
     };
-    if pm.analyzers()[0].needs_content() {
+    if analyzer.needs_content() {
         let bytes = fs::read(&file_path2).unwrap();
         spec2.content_b64 = Some(general_purpose::STANDARD.encode(bytes));
     }
-    let res: Value = pm.analyzers()[0].analyze(vec![spec2]).unwrap();
+    let res: Value = analyzer.analyze(vec![spec2]).unwrap();
     assert_eq!(res["findings"][0]["message"], "hello");
     let virtual_path = res["findings"][0]["file"].as_str().unwrap();
     assert!(virtual_path.starts_with("/virtual/content.txt-"));
@@ -339,7 +353,7 @@ timeout_ms = 5000
     dup_a.content_b64 = Some(general_purpose::STANDARD.encode(fs::read(&dup_a_path).unwrap()));
     dup_b.content_b64 = Some(general_purpose::STANDARD.encode(fs::read(&dup_b_path).unwrap()));
 
-    let first: Value = pm.analyzers()[0]
+    let first: Value = analyzer
         .analyze(vec![dup_a.clone(), dup_b.clone()])
         .unwrap();
     let first_a = first["findings"][0]["file"].as_str().unwrap().to_owned();
@@ -348,7 +362,7 @@ timeout_ms = 5000
     assert!(first_b.starts_with("/virtual/duplicate.txt-"));
     assert_ne!(first_a, first_b);
 
-    let second: Value = pm.analyzers()[0].analyze(vec![dup_a, dup_b]).unwrap();
+    let second: Value = analyzer.analyze(vec![dup_a, dup_b]).unwrap();
     assert_eq!(second["findings"][0]["file"].as_str().unwrap(), first_a);
     assert_eq!(second["findings"][1]["file"].as_str().unwrap(), first_b);
 
@@ -487,6 +501,12 @@ timeout_ms = 5000
     let pm =
         PluginManager::load(&[tmp.path().to_path_buf()], &HashMap::new(), &root, &root).unwrap();
 
+    let analyzer = pm
+        .analyzers()
+        .iter()
+        .find(|p| p.name() == "iso")
+        .expect("iso analyzer loaded");
+
     let mut spec = FileSpec {
         path: file_path.to_string_lossy().into_owned(),
         ..Default::default()
@@ -494,7 +514,7 @@ timeout_ms = 5000
     let bytes = fs::read(&file_path).unwrap();
     spec.content_b64 = Some(general_purpose::STANDARD.encode(bytes));
 
-    let res: serde_json::Value = pm.analyzers()[0].analyze(vec![spec]).unwrap();
+    let res: serde_json::Value = analyzer.analyze(vec![spec]).unwrap();
     assert_eq!(res["findings"][0]["message"], "missing");
     assert_ne!(
         res["findings"][0]["file"].as_str().unwrap(),
