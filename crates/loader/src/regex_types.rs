@@ -30,6 +30,32 @@ impl<'a> AnyCaptures<'a> {
 }
 
 impl AnyRegex {
+    fn clamp_match_to_char_boundaries(
+        text: &str,
+        start: usize,
+        end: usize,
+    ) -> Option<(usize, usize)> {
+        if start >= end || start >= text.len() {
+            return None;
+        }
+
+        let mut clamped_start = start;
+        while clamped_start < text.len() && !text.is_char_boundary(clamped_start) {
+            clamped_start += 1;
+        }
+
+        let mut clamped_end = end.min(text.len());
+        while clamped_end > clamped_start && !text.is_char_boundary(clamped_end) {
+            clamped_end -= 1;
+        }
+
+        if clamped_start < clamped_end {
+            Some((clamped_start, clamped_end))
+        } else {
+            None
+        }
+    }
+
     pub fn is_fancy(&self) -> bool {
         matches!(self, Self::Fancy(_))
     }
@@ -52,12 +78,12 @@ impl AnyRegex {
             Self::Fancy(r) => Box::new(
                 r.find_iter(text)
                     .filter_map(|m| m.ok())
-                    .map(|m| (m.start(), m.end())),
+                    .filter_map(|m| Self::clamp_match_to_char_boundaries(text, m.start(), m.end())),
             ),
             Self::Pcre2(r) => Box::new(
                 r.find_iter(text.as_bytes())
                     .filter_map(|m| m.ok())
-                    .map(|m| (m.start(), m.end())),
+                    .filter_map(|m| Self::clamp_match_to_char_boundaries(text, m.start(), m.end())),
             ),
         }
     }
@@ -105,6 +131,31 @@ impl From<FancyRegex> for AnyRegex {
 impl From<Pcre2Regex> for AnyRegex {
     fn from(r: Pcre2Regex) -> Self {
         AnyRegex::Pcre2(r)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AnyRegex;
+
+    #[test]
+    fn clamp_match_skips_invalid_utf8_boundaries() {
+        let text = "ab’cd";
+
+        // End points inside the multibyte apostrophe.
+        let clamped = AnyRegex::clamp_match_to_char_boundaries(text, 0, 3);
+
+        assert_eq!(clamped, Some((0, 2)));
+    }
+
+    #[test]
+    fn clamp_match_skips_range_without_valid_char_span() {
+        let text = "ab’cd";
+
+        // Starts and ends inside the same multibyte code point.
+        let clamped = AnyRegex::clamp_match_to_char_boundaries(text, 3, 4);
+
+        assert_eq!(clamped, None);
     }
 }
 

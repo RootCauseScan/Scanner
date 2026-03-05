@@ -32,6 +32,7 @@ fn slow_rule_respects_timeout() {
         rule_timeout: Some(Duration::from_millis(10)),
         baseline: None,
         suppress_comment: None,
+        analysis_errors: None,
     };
 
     let start = Instant::now();
@@ -85,6 +86,7 @@ fn slow_rule_does_not_block_fast_rule() {
         rule_timeout: Some(Duration::from_millis(10)),
         baseline: None,
         suppress_comment: None,
+        analysis_errors: None,
     };
 
     let start = Instant::now();
@@ -125,6 +127,7 @@ fn analyzes_without_rule_timeout() {
         rule_timeout: None,
         baseline: None,
         suppress_comment: None,
+        analysis_errors: None,
     };
 
     let findings = analyze_file_with_config(&file, &rules, &cfg, None);

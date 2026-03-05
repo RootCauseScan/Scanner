@@ -26,3 +26,23 @@ fn respects_chunk_size_option() -> Result<(), Box<dyn std::error::Error>> {
         .stdout(contains("py.no-eval"));
     Ok(())
 }
+
+#[test]
+fn zero_chunk_size_argument_errors() -> Result<(), Box<dyn std::error::Error>> {
+    let root = repo_root();
+    let scan_dir = root.join("examples/fixtures/python/py.no-eval");
+    let rules = root.join("examples/rules/python");
+
+    Command::cargo_bin("rootcause")?
+        .arg("scan")
+        .arg(&scan_dir)
+        .arg("--rules")
+        .arg(&rules)
+        .arg("--chunk-size")
+        .arg("0")
+        .assert()
+        .failure()
+        .stderr(contains("chunk-size must be greater than 0"));
+
+    Ok(())
+}

@@ -33,7 +33,6 @@ pub fn print_plugin_status(plugins: &[String]) {
     }
 }
 
-
 /// The bar renders only when stderr is attached to a terminal. For
 /// non-interactive environments (CI, redirections), progress updates
 /// are skipped to avoid noisy logs.

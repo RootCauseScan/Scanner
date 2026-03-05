@@ -1,4 +1,5 @@
 use assert_cmd::prelude::*;
+use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -23,6 +24,15 @@ fn run_rule(
     let base = root.join("fixtures").join(lang).join(rule_id);
     let good = base.join(good_rel);
     let bad = base.join(bad_rel);
+
+    // Ensure helper keeps resolving rules and fixtures from examples/.
+    assert!(rules_dir.ends_with(Path::new("examples").join("rules").join(lang)));
+    assert!(base.ends_with(
+        Path::new("examples")
+            .join("fixtures")
+            .join(lang)
+            .join(rule_id)
+    ));
 
     let output = Command::cargo_bin("rootcause")?
         .arg("scan")
@@ -127,4 +137,19 @@ fn javascript_no_innerhtml() -> Result<(), Box<dyn std::error::Error>> {
 #[test]
 fn python_pickle_loads() -> Result<(), Box<dyn std::error::Error>> {
     run_rule("py.pickle-loads", "python", "good.py", "bad.py")
+}
+
+#[test]
+fn java_no_system_exit() -> Result<(), Box<dyn std::error::Error>> {
+    run_rule("java.no-system-exit", "java", "good.java", "bad.java")
+}
+
+#[test]
+fn java_no_runtime_exec() -> Result<(), Box<dyn std::error::Error>> {
+    run_rule("java.no-runtime-exec", "java", "good.java", "bad.java")
+}
+
+#[test]
+fn java_no_class_forname() -> Result<(), Box<dyn std::error::Error>> {
+    run_rule("java.no-class-forname", "java", "good.java", "bad.java")
 }

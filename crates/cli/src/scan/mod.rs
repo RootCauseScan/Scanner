@@ -3,7 +3,7 @@ use base64::{engine::general_purpose, Engine as _};
 use serde_json::Value as JsonValue;
 use std::collections::{hash_map::Entry, HashMap, HashSet};
 use std::fs;
-use std::io::Write;
+use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tracing::level_filters::LevelFilter;
@@ -20,6 +20,21 @@ use ir::FileIR;
 use loader::{visit, Severity};
 use plugin_core::{discover_plugins, FileSpec, RepoDiscoverParams};
 
+#[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
+pub struct ScanOutcome {
+    pub should_fail_ci: bool,
+}
+
+impl ScanOutcome {
+    pub const fn exit_code(self) -> i32 {
+        if self.should_fail_ci {
+            1
+        } else {
+            0
+        }
+    }
+}
+
 // Rules functionality moved to src/rules/
 fn apply_fix(f: &Finding, fix: &str) -> Result<()> {
     let mut content = fs::read_to_string(&f.file)?;
@@ -29,8 +44,9 @@ fn apply_fix(f: &Finding, fix: &str) -> Result<()> {
         bail!("invalid location");
     }
     let line = lines[f.line - 1];
-    let line_len = line.strip_suffix('\n').unwrap_or(line).len();
-    if f.column == 0 || f.column > line_len {
+    let line_without_newline = line.strip_suffix('\n').unwrap_or(line);
+    let line_chars = line_without_newline.chars().count();
+    if f.column == 0 || f.column > line_chars {
         bail!("invalid location");
     }
 
@@ -38,10 +54,24 @@ fn apply_fix(f: &Finding, fix: &str) -> Result<()> {
     for l in lines.iter().take(f.line - 1) {
         idx += l.len();
     }
-    idx += f.column - 1;
-    let end = idx + f.excerpt.len();
-    if end > content.len() {
+
+    let column_byte_offset = line_without_newline
+        .char_indices()
+        .map(|(i, _)| i)
+        .nth(f.column - 1)
+        .ok_or_else(|| anyhow::anyhow!("invalid location"))?;
+    idx += column_byte_offset;
+
+    let excerpt_chars = f.excerpt.chars().count();
+    let end = content[idx..]
+        .char_indices()
+        .nth(excerpt_chars)
+        .map_or(content.len(), |(i, _)| idx + i);
+    if end > content.len() || !content.is_char_boundary(idx) || !content.is_char_boundary(end) {
         bail!("invalid location");
+    }
+    if content.get(idx..end) != Some(f.excerpt.as_str()) {
+        bail!("fix range does not match finding excerpt");
     }
 
     let mut replacement = fix.to_string();
@@ -57,6 +87,67 @@ fn apply_fix(f: &Finding, fix: &str) -> Result<()> {
     content.replace_range(idx..end, &replacement);
     fs::write(&f.file, content)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn test_finding(file: PathBuf, line: usize, column: usize, excerpt: &str) -> Finding {
+        Finding {
+            id: "test-id".to_string(),
+            rule_id: "test.rule".to_string(),
+            rule_file: None,
+            severity: Severity::Low,
+            file,
+            line,
+            column,
+            excerpt: excerpt.to_string(),
+            message: "test message".to_string(),
+            remediation: None,
+            fix: None,
+        }
+    }
+
+    fn write_temp_file(content: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("valid system time")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "rootcause_apply_fix_{}_{}.txt",
+            std::process::id(),
+            unique
+        ));
+        fs::write(&path, content).expect("write temp file");
+        path
+    }
+
+    #[test]
+    fn apply_fix_handles_multibyte_with_non_first_column() {
+        let path = write_temp_file("foo áé🙂bar\n");
+        let finding = test_finding(path.clone(), 1, 5, "áé🙂");
+
+        apply_fix(&finding, "XYZ").expect("apply fix succeeds");
+
+        let updated = fs::read_to_string(&path).expect("read updated file");
+        assert_eq!(updated, "foo XYZbar\n");
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn apply_fix_fails_when_excerpt_does_not_match_range() {
+        let path = write_temp_file("Año 🙂 seguro\n");
+        let finding = test_finding(path.clone(), 1, 3, "NOPE");
+
+        let err = apply_fix(&finding, "OK").expect_err("must fail on mismatch");
+        assert!(err.to_string().contains("excerpt"));
+
+        let unchanged = fs::read_to_string(&path).expect("read unchanged file");
+        assert_eq!(unchanged, "Año 🙂 seguro\n");
+        let _ = fs::remove_file(path);
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -128,6 +219,36 @@ pub fn update_files_from_transform(
     }
 }
 
+fn append_analysis_error_log(details: &str) {
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("rootcause.error.log")
+    {
+        let _ = writeln!(file, "[{timestamp}] kind=analysis_timeout\n{details}\n---");
+    }
+}
+
+fn collect_scan_languages(files: &[InputFile]) -> HashSet<String> {
+    let mut languages = HashSet::new();
+    for f in files {
+        let language = f
+            .language
+            .as_deref()
+            .map(str::to_string)
+            .or_else(|| parsers::detect_type(&f.path).map(str::to_string));
+        if let Some(language) = language {
+            languages.insert(language.trim().to_ascii_lowercase());
+        }
+    }
+    languages
+}
+
 fn parse_transformed_content(
     path: &Path,
     content: &str,
@@ -186,7 +307,18 @@ fn parse_transformed_content(
     Some(fir)
 }
 
-pub fn run_scan(mut args: ScanArgs) -> anyhow::Result<()> {
+fn init_tracing(level: LevelFilter) {
+    if let Err(err) = tracing_subscriber::fmt()
+        .with_max_level(level)
+        .with_writer(std::io::stderr)
+        .with_target(false)
+        .try_init()
+    {
+        debug!(error = %err, "Global tracing subscriber already initialized");
+    }
+}
+
+pub fn run_scan(mut args: ScanArgs) -> anyhow::Result<ScanOutcome> {
     let user_cfg = load_config().context("failed to load configuration")?;
     let mut plugin_configs: HashMap<String, JsonValue> = if let Some(ref path) = args.plugin_config
     {
@@ -283,11 +415,9 @@ pub fn run_scan(mut args: ScanArgs) -> anyhow::Result<()> {
     } else {
         LevelFilter::INFO
     };
-    tracing_subscriber::fmt()
-        .with_max_level(level)
-        .with_writer(std::io::stderr)
-        .with_target(false)
-        .init();
+
+    init_tracing(level);
+
     if args.debug && !args.quiet {
         debug!("Debug mode enabled");
     }
@@ -309,15 +439,28 @@ pub fn run_scan(mut args: ScanArgs) -> anyhow::Result<()> {
     }
 
     if !args.rules.exists() {
-        println!("Rules directory '{}' not found.", args.rules.display());
-        print!("Do you want to download the official rules package now? [y/N]: ");
-        std::io::stdout()
-            .flush()
-            .context("failed to flush stdout")?;
-        let mut answer = String::new();
-        std::io::stdin().read_line(&mut answer)?;
-        let answer = answer.trim().to_lowercase();
-        if !matches!(answer.as_str(), "y" | "yes" | "s" | "si") {
+        let stdin_is_tty = std::io::stdin().is_terminal();
+        let stdout_is_tty = std::io::stdout().is_terminal();
+        let should_download = if args.download_rules {
+            true
+        } else if stdin_is_tty && stdout_is_tty {
+            println!("Rules directory '{}' not found.", args.rules.display());
+            print!("Do you want to download the official rules package now? [y/N]: ");
+            std::io::stdout()
+                .flush()
+                .context("failed to flush stdout")?;
+            let mut answer = String::new();
+            std::io::stdin().read_line(&mut answer)?;
+            let answer = answer.trim().to_lowercase();
+            matches!(answer.as_str(), "y" | "yes" | "s" | "si")
+        } else {
+            bail!(
+                "rules directory '{}' not found in non-interactive mode; rerun with --download-rules to install official rules automatically",
+                args.rules.display()
+            );
+        };
+
+        if !should_download {
             bail!("rules directory not found; aborting scan");
         }
 
@@ -357,61 +500,6 @@ maintainer = "RootCause Security Team <contact@rootcause.dev>"
         args.rules = official_rules_dir;
     }
 
-    let mut ruleset = loader::load_rules(&args.rules)?;
-
-    // Only load extra rules from the configuration if we're using the default directory
-    // and the rules path is a directory (not a single file)
-    let default_rules_dir = config_dir().join("rules");
-    if !args.rules_provided && args.rules == default_rules_dir && args.rules.is_dir() {
-        let cfg_rule_dirs: Vec<PathBuf> = user_cfg
-            .rules
-            .rule_dirs
-            .iter()
-            .map(|p| {
-                if p.is_relative() {
-                    config_dir().join(p)
-                } else {
-                    p.clone()
-                }
-            })
-            .collect();
-        for dir in &cfg_rule_dirs {
-            if dir.exists() && dir != &args.rules {
-                let extra = loader::load_rules(dir)?;
-                ruleset.rules.extend(extra.rules);
-            }
-        }
-    }
-
-    // If we're loading a single file, don't load any additional rules
-    if !args.rules.is_dir() {
-        // Reset and only load the specified file
-        ruleset.rules.clear();
-        ruleset = loader::load_rules(&args.rules)?;
-    }
-    info!(count = ruleset.rules.len(), "Rules loaded");
-    // Load rules exposed by plugins with the `rules` capability
-    // Only load plugin rules if we're using a directory (not a single file)
-    if args.rules.is_dir() {
-        for plugin in &infos {
-            if plugin.manifest.capabilities.iter().any(|c| c == "rules") {
-                let rules_path = plugin.path.join("rules");
-                if rules_path.is_dir() {
-                    let plugin_rules = loader::load_rules(&rules_path)?;
-                    let added = plugin_rules.rules.len();
-                    ruleset.rules.extend(plugin_rules.rules);
-                    let plugin_name = plugin
-                        .manifest
-                        .name
-                        .clone()
-                        .unwrap_or_else(|| plugin.path.display().to_string());
-                    info!(plugin = %plugin_name, count = added, "Plugin rules loaded");
-                }
-            }
-        }
-    }
-    debug!(rules = ruleset.rules.len(), path = %args.rules.display(), "Rules loaded");
-
     // Collect file paths (core collector)
     let mut files: Vec<InputFile> = Vec::new();
     let mut file_index: HashMap<PathBuf, usize> = HashMap::new();
@@ -430,7 +518,7 @@ maintainer = "RootCause Security Team <contact@rootcause.dev>"
                 files.push(InputFile {
                     path: path_buf.clone(),
                     content_b64: None,
-                    language: None,
+                    language: parsers::detect_type(p).map(str::to_string),
                     notes: Vec::new(),
                 });
                 file_index.insert(path_buf, idx);
@@ -486,6 +574,76 @@ maintainer = "RootCause Security Team <contact@rootcause.dev>"
         );
     }
 
+    let scan_languages = collect_scan_languages(&files);
+
+    let mut ruleset = loader::load_rules(&args.rules)?;
+
+    // Only load extra rules from the configuration if we're using the default directory
+    // and the rules path is a directory (not a single file)
+    let default_rules_dir = config_dir().join("rules");
+    if !args.rules_provided && args.rules == default_rules_dir && args.rules.is_dir() {
+        let cfg_rule_dirs: Vec<PathBuf> = user_cfg
+            .rules
+            .rule_dirs
+            .iter()
+            .map(|p| {
+                if p.is_relative() {
+                    config_dir().join(p)
+                } else {
+                    p.clone()
+                }
+            })
+            .collect();
+        for dir in &cfg_rule_dirs {
+            if dir.exists() && dir != &args.rules {
+                let extra = loader::load_rules(dir)?;
+                ruleset.rules.extend(extra.rules);
+            }
+        }
+    }
+
+    // If we're loading a single file, don't load any additional rules
+    if !args.rules.is_dir() {
+        // Reset and only load the specified file
+        ruleset.rules.clear();
+        ruleset = loader::load_rules(&args.rules)?;
+    }
+    // Load rules exposed by plugins with the `rules` capability
+    // Only load plugin rules if we're using a directory (not a single file)
+    if args.rules.is_dir() {
+        for plugin in &infos {
+            if plugin.manifest.capabilities.iter().any(|c| c == "rules") {
+                let rules_path = plugin.path.join("rules");
+                if rules_path.is_dir() {
+                    let plugin_rules = loader::load_rules(&rules_path)?;
+                    let added = plugin_rules.rules.len();
+                    ruleset.rules.extend(plugin_rules.rules);
+                    let plugin_name = plugin
+                        .manifest
+                        .name
+                        .clone()
+                        .unwrap_or_else(|| plugin.path.display().to_string());
+                    info!(plugin = %plugin_name, count = added, "Plugin rules loaded");
+                }
+            }
+        }
+    }
+
+    let rules_before_filter = ruleset.rules.len();
+    ruleset.rules.retain(|rule| {
+        rule.languages.iter().any(|lang| {
+            lang.eq_ignore_ascii_case("generic")
+                || scan_languages.contains(&lang.to_ascii_lowercase())
+        })
+    });
+    info!(
+        count = ruleset.rules.len(),
+        skipped = rules_before_filter.saturating_sub(ruleset.rules.len()),
+        languages = scan_languages.len(),
+        "Rules loaded"
+    );
+    debug!(rules = ruleset.rules.len(), path = %args.rules.display(), "Rules loaded");
+
     info!(files = files.len(), "Files queued");
     debug!(
         files = files.len(),
@@ -497,11 +655,17 @@ maintainer = "RootCause Security Team <contact@rootcause.dev>"
     } else {
         None
     };
+    let timeout_operation_ms = args
+        .timeout_operation_ms
+        .or(user_cfg.scan.timeout_operation_ms)
+        .unwrap_or(5_000);
+    let analysis_errors = Arc::new(Mutex::new(Vec::new()));
     let cfg = engine::EngineConfig {
-        file_timeout: args.timeout_file_ms.map(std::time::Duration::from_millis),
-        rule_timeout: args.timeout_rule_ms.map(std::time::Duration::from_millis),
+        file_timeout: None,
+        rule_timeout: Some(std::time::Duration::from_millis(timeout_operation_ms)),
         baseline,
         suppress_comment: Some(args.suppress_comment.clone()),
+        analysis_errors: Some(Arc::clone(&analysis_errors)),
     };
     let mut metrics = engine::EngineMetrics::default();
     let mut metrics_opt = if args.metrics.is_some() {
@@ -952,6 +1116,27 @@ maintainer = "RootCause Security Team <contact@rootcause.dev>"
             capabilities: i.manifest.capabilities.clone(),
         })
         .collect();
+    if let Ok(errors) = analysis_errors.lock() {
+        for error in errors.iter() {
+            match error {
+                engine::AnalysisError::RuleTimeout {
+                    rule_id,
+                    file_path,
+                    timeout_ms,
+                } => {
+                    append_analysis_error_log(&format!(
+                        "rule_id={rule_id}\nfile={file_path}\ntimeout_ms={timeout_ms}"
+                    ));
+                }
+                engine::AnalysisError::RulePanic { rule_id, file_path } => {
+                    append_analysis_error_log(&format!(
+                        "rule_id={rule_id}\nfile={file_path}\nreason=panic"
+                    ));
+                }
+            }
+        }
+    }
+
     let scan_info = reporters::ScanInfo {
         rules_loaded: ruleset.rules.len(),
         files_analyzed: total_files,
@@ -983,11 +1168,42 @@ maintainer = "RootCause Security Team <contact@rootcause.dev>"
         let data = serde_json::to_string_pretty(&engine::all_function_taints())?;
         eprintln!("{data}");
     }
-    if let Some(thr) = args.fail_on {
-        if max_sev >= thr {
-            std::process::exit(1);
-        }
-    }
+    let should_fail_ci = args.fail_on.is_some_and(|thr| max_sev >= thr);
     info!(findings = findings.len(), "Scan completed");
-    Ok(())
+    Ok(ScanOutcome { should_fail_ci })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ScanOutcome;
+
+    #[test]
+    fn scan_outcome_exit_code_reflects_fail_on_state() {
+        assert_eq!(
+            ScanOutcome {
+                should_fail_ci: true
+            }
+            .exit_code(),
+            1
+        );
+        assert_eq!(
+            ScanOutcome {
+                should_fail_ci: false
+            }
+            .exit_code(),
+            0
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::init_tracing;
+    use tracing::level_filters::LevelFilter;
+
+    #[test]
+    fn init_tracing_can_be_called_twice_without_panicking() {
+        init_tracing(LevelFilter::INFO);
+        init_tracing(LevelFilter::DEBUG);
+    }
 }

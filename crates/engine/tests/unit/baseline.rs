@@ -105,6 +105,7 @@ fn baseline_filters_by_file_and_line() {
         rule_timeout: None,
         baseline: Some(set),
         suppress_comment: None,
+        analysis_errors: None,
     };
     let res = analyze_files_with_config(&[file.clone()], &rules, &cfg, None, None, None);
     assert!(res.is_empty());
@@ -117,6 +118,7 @@ fn baseline_filters_by_file_and_line() {
         rule_timeout: None,
         baseline: Some(set2),
         suppress_comment: None,
+        analysis_errors: None,
     };
     let res2 = analyze_files_with_config(&[file], &rules, &cfg2, None, None, None);
     assert_eq!(res2.len(), 1);

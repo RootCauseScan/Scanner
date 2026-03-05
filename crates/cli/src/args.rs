@@ -31,6 +31,17 @@ fn parse_threads(s: &str) -> Result<usize, String> {
     }
 }
 
+fn parse_chunk_size(s: &str) -> Result<usize, String> {
+    let v: usize = s
+        .parse()
+        .map_err(|e: std::num::ParseIntError| e.to_string())?;
+    if v == 0 {
+        Err("chunk-size must be greater than 0".into())
+    } else {
+        Ok(v)
+    }
+}
+
 #[derive(Parser)]
 #[command(
     author,
@@ -101,6 +112,9 @@ pub struct ScanArgs {
     /// Path to rules directory or ruleset
     #[arg(long, default_value_os_t = default_rules_path())]
     pub rules: PathBuf,
+    /// Download official rules automatically when missing
+    #[arg(long = "download-rules")]
+    pub download_rules: bool,
     /// True if `--rules` was explicitly provided.
     #[arg(skip = false)]
     pub rules_provided: bool,
@@ -122,12 +136,9 @@ pub struct ScanArgs {
     /// Maximum file size to scan (in bytes)
     #[arg(long, default_value_t = DEFAULT_MAX_FILE_SIZE)]
     pub max_file_size: u64,
-    /// Timeout per file in milliseconds
+    /// Timeout per rule-vs-file operation in milliseconds
     #[arg(long)]
-    pub timeout_file_ms: Option<u64>,
-    /// Timeout per rule in milliseconds
-    #[arg(long)]
-    pub timeout_rule_ms: Option<u64>,
+    pub timeout_operation_ms: Option<u64>,
     /// Write performance metrics to file
     #[arg(long)]
     pub metrics: Option<PathBuf>,
@@ -153,7 +164,7 @@ pub struct ScanArgs {
     #[arg(long)]
     pub stream: bool,
     /// Number of findings to process in each chunk
-    #[arg(long, default_value_t = 100)]
+    #[arg(long, default_value_t = 100, value_parser = parse_chunk_size)]
     pub chunk_size: usize,
     /// Dump taint analysis data for debugging
     #[arg(long = "dump-taints")]

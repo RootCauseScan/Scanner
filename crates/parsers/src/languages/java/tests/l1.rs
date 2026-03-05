@@ -23,6 +23,28 @@ fn parse_fixture(dir: &str, file: &str) -> FileIR {
     fir
 }
 
+// Default Java catalog should include core source/sink/sanitizer symbols.
+#[test]
+fn java_default_catalog_symbols_are_registered() {
+    assert!(catalog::is_source(
+        "java",
+        "javax.servlet.http.HttpServletRequest.getParameter"
+    ));
+    assert!(catalog::is_source(
+        "java",
+        "com.fasterxml.jackson.databind.ObjectMapper.readValue"
+    ));
+
+    assert!(catalog::is_sink("java", "Runtime.getRuntime().exec"));
+    assert!(catalog::is_sink("java", "java.sql.Statement.executeQuery"));
+
+    assert!(catalog::is_sanitizer("java", "org.jsoup.Jsoup.clean"));
+    assert!(catalog::is_sanitizer(
+        "java",
+        "org.owasp.encoder.Encode.forHtml"
+    ));
+}
+
 // Sanitizer call should propagate clean data through aliases.
 #[test]
 fn builds_ir_and_dfg_with_sanitizer() {

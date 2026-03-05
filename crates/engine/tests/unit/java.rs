@@ -42,3 +42,10 @@ fn java_no_runtime_exec_rule() {
     reset_canonical_cache();
     run_java_rule("java.no-runtime-exec", "good.java", "bad.java");
 }
+
+#[test]
+fn java_no_class_forname_rule() {
+    let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    reset_canonical_cache();
+    run_java_rule("java.no-class-forname", "good.java", "bad.java");
+}

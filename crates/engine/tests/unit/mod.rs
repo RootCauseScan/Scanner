@@ -155,6 +155,31 @@ fn rules_are_filtered_by_language() {
 }
 
 #[test]
+fn java_rules_do_not_run_on_python_files() {
+    let mut file = FileIR::new("/tmp/test.py".into(), "python".into());
+    file.source = Some("System.exit(1);".into());
+
+    let mut rules = RuleSet::default();
+    rules.rules.push(CompiledRule {
+        id: "java.only".into(),
+        severity: Severity::Low,
+        category: "demo".into(),
+        message: "java".into(),
+        remediation: None,
+        fix: None,
+        interfile: false,
+        matcher: MatcherKind::TextRegex(Regex::new(r"System\.exit").unwrap().into(), String::new()),
+        source_file: None,
+        sources: vec![],
+        sinks: vec![],
+        languages: vec!["java".into()],
+    });
+
+    let findings = analyze_file(&file, &rules);
+    assert!(findings.is_empty());
+}
+
+#[test]
 fn json_path_eq_matches_yaml_nodes() {
     let mut rules = RuleSet::default();
     rules.rules.push(CompiledRule {
@@ -354,6 +379,7 @@ fn rule_timeout_yields_no_findings() {
             rule_timeout: Some(Duration::from_millis(0)),
             baseline: None,
             suppress_comment: None,
+            analysis_errors: None,
         },
         None,
         None,
@@ -405,6 +431,7 @@ fn file_timeout_yields_no_findings() {
             rule_timeout: None,
             baseline: None,
             suppress_comment: None,
+            analysis_errors: None,
         },
         None,
     );

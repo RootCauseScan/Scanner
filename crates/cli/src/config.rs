@@ -90,6 +90,14 @@ pub struct Config {
     pub rules: RuleConfig,
     #[serde(default)]
     pub cache: CacheConfig,
+    #[serde(default)]
+    pub scan: ScanConfig,
+}
+
+#[derive(Serialize, Deserialize, Default)]
+pub struct ScanConfig {
+    #[serde(default)]
+    pub timeout_operation_ms: Option<u64>,
 }
 
 pub fn load_config() -> Result<Config> {

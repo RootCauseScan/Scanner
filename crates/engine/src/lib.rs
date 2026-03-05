@@ -18,7 +18,7 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{mpsc, Arc, OnceLock};
+use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::thread_local;
 use std::time::{Duration, Instant};
 use tracing::{debug, warn};
@@ -461,6 +461,7 @@ fn regex_ranges_any(source: &str, regs: &[AnyRegex]) -> Vec<(usize, usize)> {
 }
 
 fn line_col_at(source: &str, pos: usize) -> (usize, usize) {
+    let pos = floor_char_boundary(source, pos);
     let mut line = 1usize;
     let mut line_start = 0usize;
     for (idx, ch) in source[..pos].char_indices() {
@@ -473,9 +474,18 @@ fn line_col_at(source: &str, pos: usize) -> (usize, usize) {
     (line, column)
 }
 
+fn floor_char_boundary(source: &str, pos: usize) -> usize {
+    let mut pos = pos.min(source.len());
+    while pos > 0 && !source.is_char_boundary(pos) {
+        pos -= 1;
+    }
+    pos
+}
+
 static ASSIGN_LHS_RE: OnceLock<Regex> = OnceLock::new();
 
 fn derive_assignment_lhs(source: &str, pos: usize) -> Option<String> {
+    let pos = floor_char_boundary(source, pos);
     let line_start = source[..pos].rfind('\n').map(|idx| idx + 1).unwrap_or(0);
     let prefix = &source[line_start..pos];
     if prefix.trim().is_empty() {
@@ -751,6 +761,20 @@ pub struct EngineConfig {
     pub rule_timeout: Option<Duration>,
     pub baseline: Option<HashSet<BaselineEntry>>,
     pub suppress_comment: Option<String>,
+    pub analysis_errors: Option<Arc<Mutex<Vec<AnalysisError>>>>,
+}
+
+#[derive(Debug, Clone)]
+pub enum AnalysisError {
+    RuleTimeout {
+        rule_id: String,
+        file_path: String,
+        timeout_ms: u128,
+    },
+    RulePanic {
+        rule_id: String,
+        file_path: String,
+    },
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -1026,21 +1050,17 @@ fn analyze_file_with_config_inner(
     let start = Instant::now();
     let mut out = Vec::new();
     let pool = thread_pool();
-    let file_arc = if cfg.rule_timeout.is_some() {
+    let operation_timeout = cfg.rule_timeout.or(cfg.file_timeout);
+    let file_arc = if operation_timeout.is_some() {
         Some(Arc::new(file.clone()))
     } else {
         None
     };
     let applicable_rules = rule_index.rules_for(&file.file_type);
     for r in applicable_rules.iter().copied() {
-        if let Some(ft) = cfg.file_timeout {
-            if start.elapsed() >= ft {
-                break;
-            }
-        }
         debug!("Evaluating rule '{}' on file '{}'", r.id, file.file_path);
         let rule_start = Instant::now();
-        let findings = if let Some(rt) = cfg.rule_timeout {
+        let findings = if let Some(rt) = operation_timeout {
             if rt.is_zero() {
                 Vec::new()
             } else {
@@ -1050,10 +1070,34 @@ fn analyze_file_with_config_inner(
                     Arc::clone(file_arc.as_ref().expect("rule timeout implies shared file"));
                 let rule_cloned = Arc::new(r.clone());
                 pool.spawn(move || {
-                    let res = eval_rule(&file_cloned, &rule_cloned);
+                    let res = std::panic::catch_unwind(|| eval_rule(&file_cloned, &rule_cloned));
                     let _ = tx.send(res);
                 });
-                rx.recv_timeout(rt).unwrap_or_default()
+                match rx.recv_timeout(rt) {
+                    Ok(Ok(findings)) => findings,
+                    Ok(Err(_)) => {
+                        if let Some(errors) = &cfg.analysis_errors {
+                            let mut guard = errors.lock().unwrap_or_else(|e| e.into_inner());
+                            guard.push(AnalysisError::RulePanic {
+                                rule_id: r.id.clone(),
+                                file_path: file.file_path.clone(),
+                            });
+                        }
+                        Vec::new()
+                    }
+                    Err(mpsc::RecvTimeoutError::Timeout) => {
+                        if let Some(errors) = &cfg.analysis_errors {
+                            let mut guard = errors.lock().unwrap_or_else(|e| e.into_inner());
+                            guard.push(AnalysisError::RuleTimeout {
+                                rule_id: r.id.clone(),
+                                file_path: file.file_path.clone(),
+                                timeout_ms: rt.as_millis(),
+                            });
+                        }
+                        Vec::new()
+                    }
+                    Err(mpsc::RecvTimeoutError::Disconnected) => Vec::new(),
+                }
             }
         } else {
             eval_rule(file, r)
@@ -2889,4 +2933,31 @@ fn jsonpath_findings(
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{derive_assignment_lhs, line_col_at};
+
+    #[test]
+    fn derive_assignment_lhs_handles_non_char_boundary() {
+        let source = "<?php
+$foo = 1; —
+";
+        let em_dash = source.find('—').expect("must include em dash");
+        let non_boundary = em_dash + 1;
+
+        assert_eq!(derive_assignment_lhs(source, non_boundary), None);
+    }
+
+    #[test]
+    fn line_col_at_handles_non_char_boundary() {
+        let source = "a
+—
+";
+        let em_dash = source.find('—').expect("must include em dash");
+        let non_boundary = em_dash + 1;
+
+        assert_eq!(line_col_at(source, non_boundary), (2, 1));
+    }
 }
