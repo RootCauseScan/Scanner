@@ -294,7 +294,7 @@ pub fn walk_ir(
             if let Some(type_node) = node.child_by_field_name("type") {
                 if let Ok(type_name) = type_node.utf8_text(src.as_bytes()) {
                     let pos = node.start_position();
-                    let path = format!("new {}", type_name);
+                    let path = format!("new {type_name}");
                     fir.push(IRNode {
                         id: 0,
                         kind: "java".into(),
@@ -307,7 +307,7 @@ pub fn walk_ir(
                         },
                     });
                     for full in resolve_import(type_name, imports, wildcards) {
-                        let full_path = format!("new {}", full);
+                        let full_path = format!("new {full}");
                         fir.push(IRNode {
                             id: 0,
                             kind: "java".into(),
