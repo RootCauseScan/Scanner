@@ -56,7 +56,7 @@ impl Worker {
         let stdin = child.stdin.take().context("open stdin")?;
         let stdout = child.stdout.take().context("open stdout")?;
         let (tx, rx) = mpsc::channel::<LineMessage>();
-        let thread_name = format!("plugin-stdout-{}", plugin_name);
+        let thread_name = format!("plugin-stdout-{plugin_name}");
         let reader_handle = thread::Builder::new()
             .name(thread_name)
             .spawn(move || {
@@ -76,7 +76,7 @@ impl Worker {
                     }
                 }
             })
-            .with_context(|| format!("spawn stdout reader thread for {}", plugin_name))?;
+            .with_context(|| format!("spawn stdout reader thread for {plugin_name}"))?;
         Ok(Self {
             child,
             stdin: BufWriter::new(stdin),

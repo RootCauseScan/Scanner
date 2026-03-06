@@ -88,9 +88,11 @@ impl PluginManager {
             let needs_content = info.manifest.needs_content.unwrap_or(false);
             let reads_fs = info.manifest.reads_fs.unwrap_or(false);
 
-            let has_any = info.manifest.capabilities.iter().any(|c| {
-                matches!(c.as_str(), "transform" | "analyze" | "report" | "discover")
-            });
+            let has_any = info
+                .manifest
+                .capabilities
+                .iter()
+                .any(|c| matches!(c.as_str(), "transform" | "analyze" | "report" | "discover"));
             if !has_any {
                 continue;
             }

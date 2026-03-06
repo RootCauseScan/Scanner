@@ -1,9 +1,65 @@
 ---
 source: crates/debugger/tests/events.rs
-expression: sink.output()
+assertion_line: 81
+expression: normalize_json_output(sink.output())
 ---
-{"kind":"RuleCompiled","path":null,"file":null,"rule_id":"py.no-exec","matched":null}
-{"kind":"ParseStart","path":"bad.py","file":null,"rule_id":null,"matched":null}
-{"kind":"ParseEnd","path":"bad.py","file":null,"rule_id":null,"matched":null}
-{"kind":"MatchAttempt","path":null,"file":"bad.py","rule_id":"py.no-exec","matched":null}
-{"kind":"MatchResult","path":null,"file":"bad.py","rule_id":"py.no-exec","matched":true}
+[
+  {
+    "description": "Rule compiled: py.no-exec",
+    "elapsed_ms": 0,
+    "event": {
+      "RuleCompiled": {
+        "id": "py.no-exec"
+      }
+    },
+    "index": 0,
+    "stage": "RuleCompilation"
+  },
+  {
+    "description": "Parsing started: bad.py",
+    "elapsed_ms": 0,
+    "event": {
+      "ParseStart": {
+        "path": "../../examples/fixtures/python/py.no-exec/bad.py"
+      }
+    },
+    "index": 1,
+    "stage": "Parsing"
+  },
+  {
+    "description": "Parsing completed: bad.py",
+    "elapsed_ms": 0,
+    "event": {
+      "ParseEnd": {
+        "path": "../../examples/fixtures/python/py.no-exec/bad.py"
+      }
+    },
+    "index": 2,
+    "stage": "Parsing"
+  },
+  {
+    "description": "Evaluating rule 'py.no-exec' on bad.py",
+    "elapsed_ms": 0,
+    "event": {
+      "MatchAttempt": {
+        "file": "/workspace/rust-sast/examples/fixtures/python/py.no-exec/bad.py",
+        "rule_id": "py.no-exec"
+      }
+    },
+    "index": 3,
+    "stage": "RuleEvaluation"
+  },
+  {
+    "description": "Rule 'py.no-exec' matched for bad.py",
+    "elapsed_ms": 0,
+    "event": {
+      "MatchResult": {
+        "file": "/workspace/rust-sast/examples/fixtures/python/py.no-exec/bad.py",
+        "matched": true,
+        "rule_id": "py.no-exec"
+      }
+    },
+    "index": 4,
+    "stage": "Matching"
+  }
+]

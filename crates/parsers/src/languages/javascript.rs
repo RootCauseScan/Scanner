@@ -423,6 +423,25 @@ mod tests {
     }
 
     #[test]
+    fn captures_dynamic_javascript_calls_and_members() {
+        let src = r#"
+        function invoke(api, method, payload) {
+          const fnRef = api[method];
+          return api[method](payload) + window.handlers[method](payload);
+        }
+        "#;
+
+        let mut fir = FileIR::new("dynamic.js".into(), "javascript".into());
+        parse_javascript(src, &mut fir);
+
+        assert!(fir.nodes.iter().any(|n| n.path == "var.fnRef"));
+        assert!(fir.nodes.iter().any(|n| n.path == "call.api[method]"));
+        assert!(fir
+            .nodes
+            .iter()
+            .any(|n| n.path == "call.window.handlers[method]"));
+    }
+    #[test]
     fn builds_basic_dfg_relationships() {
         let src = r#"
         function handler(input) {

@@ -127,11 +127,7 @@ impl ManagedPlugin {
     }
 
     /// Executes `scan.report` on the managed plugin.
-    pub fn report<R: DeserializeOwned>(
-        &self,
-        findings: Value,
-        metrics: Value,
-    ) -> Result<R> {
+    pub fn report<R: DeserializeOwned>(&self, findings: Value, metrics: Value) -> Result<R> {
         self.plugin
             .report(findings, metrics)
             .with_context(|| format!("plugin {}", self.name))

@@ -211,7 +211,7 @@ pub(crate) fn write_findings<W: Write>(
                         f.rule_id
                     )?;
                     if let Some(rule_file) = &f.rule_file {
-                        writeln!(out, "    Rule file: {}", rule_file)?;
+                        writeln!(out, "    Rule file: {rule_file}")?;
                     }
                     writeln!(out, "    {}", f.message)?;
                     writeln!(out, "    ↳  {}", f.excerpt.trim())?;

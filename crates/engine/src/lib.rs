@@ -1622,7 +1622,7 @@ fn eval_rule_impl(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
                     && inside_matches.iter().all(|(_, _, sym)| sym.is_none())
                 {
                     let inside_patterns: Vec<String> =
-                        tp.inside.iter().map(|re| format!("{:?}", re)).collect();
+                        tp.inside.iter().map(|re| format!("{re:?}")).collect();
                     debug!(
                         rule = %rule.id,
                         file = %file.file_path,

@@ -260,8 +260,7 @@ fn handle_string_regex_segments(seg: &str) -> Vec<PatternSegment> {
             let quoted_double = regex_part.replace("\"", "\\\"");
             let quoted_single = regex_part.replace("'", "\\'");
             segments.push(PatternSegment::regex(format!(
-                r#"(?:"{0}"|'{1}'|{2})"#,
-                quoted_double, quoted_single, regex_part
+                r#"(?:"{quoted_double}"|'{quoted_single}'|{regex_part})"#
             )));
             segments.push(escape_pattern_segment(suffix));
             return segments;
@@ -769,7 +768,7 @@ pub(crate) fn compile_semgrep_rule(
                 continue;
             }
             let union = parts.join("|");
-            let final_re = format!("(?s)(?:{})", union);
+            let final_re = format!("(?s)(?:{union})");
             mv.insert(var, final_re);
         }
     }
@@ -937,7 +936,7 @@ pub(crate) fn compile_semgrep_rule(
                     .map(|s| s.strip_prefix("(?s)").map(|x| x.to_string()).unwrap_or(s))
                     .collect();
                 let joined = cleaned.join(")|(?:");
-                let big = format!("(?s)(?:{})", joined);
+                let big = format!("(?s)(?:{joined})");
                 Some(FancyRegex::new(&big)?.into())
             } else {
                 None

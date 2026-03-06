@@ -219,18 +219,54 @@ pub fn update_files_from_transform(
     }
 }
 
-fn append_analysis_error_log(details: &str) {
+fn append_analysis_error_log(kind: &str, details: &str, args: &ScanArgs, files_analyzed: usize) {
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
+    let cwd = std::env::current_dir()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|_| "<unavailable>".to_string());
+    let command_args = std::env::args().collect::<Vec<_>>().join(" ");
+    let plugin_paths = if args.plugins.is_empty() {
+        "<none>".to_string()
+    } else {
+        args.plugins
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>()
+            .join(",")
+    };
+    let context = format!(
+        "kind={kind}\n{}\nprocess.pid={}\nprocess.cwd={cwd}\nprocess.argv={command_args}\nenv.RUST_BACKTRACE={}\nscan.path={}\nscan.rules={}\nscan.plugins={plugin_paths}\nscan.plugin_config={}\nscan.fail_on={}\nscan.timeout_operation_ms={}\nscan.max_file_size={}\nscan.threads={}\nscan.files_analyzed={files_analyzed}\nscan.output_format={:?}",
+        details.trim_end(),
+        std::process::id(),
+        std::env::var("RUST_BACKTRACE").unwrap_or_else(|_| "<unset>".to_string()),
+        args.path.display(),
+        args.rules.display(),
+        args.plugin_config
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "<none>".to_string()),
+        args.fail_on
+            .map(|sev| sev.to_string())
+            .unwrap_or_else(|| "<none>".to_string()),
+        args.timeout_operation_ms
+            .map(|t| t.to_string())
+            .unwrap_or_else(|| "<none>".to_string()),
+        args.max_file_size,
+        args.threads,
+        args.format,
+    );
+
+    error!("{context}");
 
     if let Ok(mut file) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open("rootcause.error.log")
     {
-        let _ = writeln!(file, "[{timestamp}] kind=analysis_timeout\n{details}\n---");
+        let _ = writeln!(file, "[{timestamp}]\n{context}\n---");
     }
 }
 
@@ -1124,14 +1160,20 @@ maintainer = "RootCause Security Team <contact@rootcause.dev>"
                     file_path,
                     timeout_ms,
                 } => {
-                    append_analysis_error_log(&format!(
-                        "rule_id={rule_id}\nfile={file_path}\ntimeout_ms={timeout_ms}"
-                    ));
+                    append_analysis_error_log(
+                        "analysis_timeout",
+                        &format!("rule_id={rule_id}\nfile={file_path}\ntimeout_ms={timeout_ms}"),
+                        &args,
+                        total_files,
+                    );
                 }
                 engine::AnalysisError::RulePanic { rule_id, file_path } => {
-                    append_analysis_error_log(&format!(
-                        "rule_id={rule_id}\nfile={file_path}\nreason=panic"
-                    ));
+                    append_analysis_error_log(
+                        "analysis_panic",
+                        &format!("rule_id={rule_id}\nfile={file_path}\nreason=panic"),
+                        &args,
+                        total_files,
+                    );
                 }
             }
         }
@@ -1174,7 +1216,7 @@ maintainer = "RootCause Security Team <contact@rootcause.dev>"
 }
 
 #[cfg(test)]
-mod tests {
+mod scan_outcome_tests {
     use super::ScanOutcome;
 
     #[test]
@@ -1197,7 +1239,7 @@ mod tests {
 }
 
 #[cfg(test)]
-mod tests {
+mod tracing_tests {
     use super::init_tracing;
     use tracing::level_filters::LevelFilter;
 

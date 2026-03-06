@@ -1,10 +1,16 @@
 use std::fs;
+use std::sync::Mutex;
 
 use plugin_core::{discover_plugins, API_VERSION};
 use tempfile::TempDir;
 
+static TEST_LOCK: Mutex<()> = Mutex::new(());
+
 #[test]
 fn supported_api_version_loads() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
     let tmp = TempDir::new().unwrap();
     fs::write(
         tmp.path().join("plugin.toml"),
@@ -25,6 +31,9 @@ fn supported_api_version_loads() {
 
 #[test]
 fn unsupported_api_version_fails() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
     let tmp = TempDir::new().unwrap();
     fs::write(
         tmp.path().join("plugin.toml"),
@@ -38,6 +47,9 @@ fn unsupported_api_version_fails() {
 
 #[test]
 fn disabled_plugins_are_skipped() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
     let tmp = TempDir::new().unwrap();
     fs::write(
         tmp.path().join("plugin.toml"),

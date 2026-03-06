@@ -1,9 +1,10 @@
 ---
 source: crates/debugger/tests/events.rs
-expression: sink.output()
+assertion_line: 59
+expression: normalize_text_output(sink.output())
 ---
-SerEvent { kind: "RuleCompiled", path: None, file: None, rule_id: Some("py.no-exec"), matched: None }
-SerEvent { kind: "ParseStart", path: Some("bad.py"), file: None, rule_id: None, matched: None }
-SerEvent { kind: "ParseEnd", path: Some("bad.py"), file: None, rule_id: None, matched: None }
-SerEvent { kind: "MatchAttempt", path: None, file: Some("bad.py"), rule_id: Some("py.no-exec"), matched: None }
-SerEvent { kind: "MatchResult", path: None, file: Some("bad.py"), rule_id: Some("py.no-exec"), matched: Some(true) }
+[+ <elapsed>] rule-compilation Rule compiled: py.no-exec
+[+ <elapsed>] parsing Parsing started: bad.py
+[+ <elapsed>] parsing Parsing completed: bad.py
+[+ <elapsed>] rule-evaluation Evaluating rule 'py.no-exec' on bad.py
+[+ <elapsed>] matching Rule 'py.no-exec' matched for bad.py
