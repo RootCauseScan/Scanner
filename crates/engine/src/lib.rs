@@ -138,6 +138,55 @@ pub fn find_taint_path(fir: &FileIR, _source: &str, _sink: &str) -> Option<Vec<u
     None
 }
 
+/// Returns true if in the DFG there is a path from the definition of `source_sym`
+/// to any node (Def or Use) whose name is in `sink_vars`. Used for PHP when the
+/// sink uses an intermediate variable (e.g. $id) that flows from a superglobal.
+fn dfg_reaches_any_var(fir: &FileIR, source_sym: &str, sink_vars: &[String]) -> bool {
+    let dfg = match fir.dfg.as_ref() {
+        Some(d) => d,
+        None => return false,
+    };
+    let sym_key = source_sym.trim_start_matches('$');
+    let def_id = match fir.symbols.get(sym_key).or_else(|| fir.symbols.get(source_sym)).and_then(|s| s.def) {
+        Some(id) => id,
+        None => return false,
+    };
+    let id_to_idx: HashMap<_, _> = dfg
+        .nodes
+        .iter()
+        .enumerate()
+        .map(|(i, n)| (n.id, i))
+        .collect();
+    let start_idx = match id_to_idx.get(&def_id) {
+        Some(&i) => i,
+        None => return false,
+    };
+    let sink_set: HashSet<&str> = sink_vars.iter().map(String::as_str).collect();
+    let mut adj: Vec<Vec<usize>> = vec![Vec::new(); dfg.nodes.len()];
+    for &(from, to) in &dfg.edges {
+        if let (Some(&f), Some(&t)) = (id_to_idx.get(&from), id_to_idx.get(&to)) {
+            adj[f].push(t);
+        }
+    }
+    let mut visited = vec![false; dfg.nodes.len()];
+    let mut queue = VecDeque::new();
+    queue.push_back(start_idx);
+    visited[start_idx] = true;
+    while let Some(idx) = queue.pop_front() {
+        let name = &dfg.nodes[idx].name;
+        if sink_set.contains(name.as_str()) {
+            return true;
+        }
+        for &next in &adj[idx] {
+            if !visited[next] {
+                visited[next] = true;
+                queue.push_back(next);
+            }
+        }
+    }
+    false
+}
+
 pub use hash::{analyze_files_cached, rules_fingerprint};
 
 static RAYON_POOL: OnceLock<rayon::ThreadPool> = OnceLock::new();
@@ -1251,6 +1300,9 @@ fn eval_rule_impl(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
             let mut findings = Vec::new();
             let inside_ranges = regex_ranges_any(source, inside);
             let not_inside_ranges = regex_ranges_any(source, not_inside);
+            if !inside.is_empty() && inside_ranges.is_empty() {
+                return findings;
+            }
             let aliases = use_aliases(file);
             for (idx, (re, orig)) in allow.iter().enumerate() {
                 if re.is_fancy() {
@@ -1638,6 +1690,10 @@ fn eval_rule_impl(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
                     inside_matches.iter().map(|(s, e, _)| (*s, *e)).collect();
                 debug!("TaintRule: Computing not_inside ranges for source {} for rule '{}' and file '{}'", tp_idx, rule.id, file.file_path);
                 let not_inside_ranges = regex_ranges_any(source_text, &tp.not_inside);
+                // When this source has pattern-inside (e.g. require('express')) and the file doesn't match, skip this source.
+                if !tp.inside.is_empty() && inside_ranges.is_empty() {
+                    continue;
+                }
                 for (ms, _, sym) in &inside_matches {
                     if let Some(sym) = sym {
                         let (line, column) = line_col_at(source_text, *ms);
@@ -2222,6 +2278,9 @@ fn eval_rule_impl(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
                         .map(|(s, e, _)| (s, e))
                         .collect();
                 let not_inside_ranges = regex_ranges_any(source_text, &tp.not_inside);
+                if !tp.inside.is_empty() && inside_ranges.is_empty() {
+                    continue;
+                }
                 for (re_idx, re) in tp.allow.iter().enumerate() {
                     if re.is_fancy() {
                         debug!(rule=%rule.id, file=%file.file_path, tp_idx, re_idx, kind="taint.sinks.allow", fancy=true, "Scanning fancy regex");
@@ -2437,12 +2496,17 @@ fn eval_rule_impl(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
                     }
 
                     let mut has_path = find_taint_path(file, sym, sink_text).is_some();
-                    if !has_path
-                        && file.file_type.eq_ignore_ascii_case("php")
-                        && PHP_SUPERGLOBALS.contains(&sym.as_str())
-                        && sink_vars.iter().any(|var| var == sym)
-                    {
-                        has_path = true;
+                    if !has_path && file.file_type.eq_ignore_ascii_case("php") {
+                        let sym_php = sym.trim_start_matches('$');
+                        if PHP_SUPERGLOBALS.contains(&sym_php) {
+                            if sink_vars.iter().any(|var| var == sym || var == sym_php) {
+                                has_path = true;
+                            } else if !sink_vars.is_empty()
+                                && dfg_reaches_any_var(file, sym_php, &sink_vars)
+                            {
+                                has_path = true;
+                            }
+                        }
                     }
 
                     if has_path {

@@ -285,7 +285,14 @@ fn build_semgrep_regex(pattern: &str, mv: &HashMap<String, String>) -> String {
                 segments.push(PatternSegment::regex(format!("({trimmed})")));
             }
         } else {
-            segments.push(PatternSegment::regex("([^\\n]*?)".to_string()));
+            // Pattern is exactly $VAR with no metavariable-regex (e.g. $_GET in taint sources).
+            // Match the literal so we find the real source (e.g. $_GET) instead of "any text".
+            let exact_var = format!("${var}");
+            if pattern == exact_var {
+                segments.extend(handle_string_regex_segments(&pattern[m.start()..m.end()]));
+            } else {
+                segments.push(PatternSegment::regex("([^\\n]*?)".to_string()));
+            }
         }
         last = m.end();
     }

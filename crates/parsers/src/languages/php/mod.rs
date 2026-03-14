@@ -744,9 +744,11 @@ pub fn parse_php(content: &str, fir: &mut FileIR) -> Result<()> {
                         let mut alias: Option<String> = None;
                         let mut sources = Vec::new();
                         let mut callee_ret: Option<usize> = None;
+                        let mut rhs_vars: Vec<String> = Vec::new();
                         if right.kind() == "variable_name" {
                             if let Ok(rtext) = right.utf8_text(src.as_bytes()) {
                                 let rname = rtext.trim_start_matches('$');
+                                rhs_vars.push(rname.to_string());
                                 alias = Some(resolve_alias(rname, &fir.symbols));
                                 if let Some(sym) = fir.symbols.get(rname) {
                                     sanitized = sym.sanitized;
@@ -768,14 +770,38 @@ pub fn parse_php(content: &str, fir: &mut FileIR) -> Result<()> {
                                 }
                             }
                         } else {
-                            let mut vars = Vec::new();
-                            collect_vars(right, src, &mut vars);
-                            for v in &vars {
-                                if alias.is_none() && vars.len() == 1 {
+                            collect_vars(right, src, &mut rhs_vars);
+                            // Ensure superglobals on RHS have a Def so we can create edges (e.g. $id = $_GET['id'])
+                            for v in &rhs_vars {
+                                if SUPERGLOBALS.contains(&v.as_str())
+                                    && !fir.symbols.get(v).and_then(|s| s.def).is_some()
+                                {
+                                    let dfg = fir.dfg.get_or_insert_with(DataFlowGraph::default);
+                                    let def_id = dfg.nodes.len();
+                                    dfg.nodes.push(DFNode {
+                                        id: def_id,
+                                        name: v.clone(),
+                                        kind: DFNodeKind::Def,
+                                        sanitized: false,
+                                        branch: branch_stack.last().copied(),
+                                    });
+                                    fir.symbols.insert(
+                                        v.clone(),
+                                        Symbol {
+                                            name: v.clone(),
+                                            sanitized: false,
+                                            def: Some(def_id),
+                                            alias_of: None,
+                                        },
+                                    );
+                                }
+                            }
+                            for v in &rhs_vars {
+                                if alias.is_none() && rhs_vars.len() == 1 {
                                     alias = Some(resolve_alias(v, &fir.symbols));
                                 }
                                 if let Some(sym) = fir.symbols.get(v) {
-                                    if !sanitized && vars.len() == 1 {
+                                    if !sanitized && rhs_vars.len() == 1 {
                                         sanitized = sym.sanitized;
                                     }
                                     if let Some(def) = sym.def {
@@ -817,6 +843,22 @@ pub fn parse_php(content: &str, fir: &mut FileIR) -> Result<()> {
                             });
                             for src_id in sources {
                                 dfg.edges.push((src_id, id));
+                            }
+                            // Create Use nodes for vars on RHS so taint can flow to a sink (e.g. "SELECT" . $id)
+                            for v in &rhs_vars {
+                                if let Some(sym) = fir.symbols.get(v) {
+                                    if let Some(def_id) = sym.def {
+                                        let use_id = dfg.nodes.len();
+                                        dfg.nodes.push(DFNode {
+                                            id: use_id,
+                                            name: v.clone(),
+                                            kind: DFNodeKind::Use,
+                                            sanitized: sym.sanitized,
+                                            branch: branch_stack.last().copied(),
+                                        });
+                                        dfg.edges.push((def_id, use_id));
+                                    }
+                                }
                             }
                             if let Some(cid) = callee_ret {
                                 dfg.call_returns.push((id, cid));

@@ -11,6 +11,7 @@ pub struct IgnorePattern {
 
 pub mod args;
 pub mod config;
+pub mod error_log;
 pub mod output;
 pub mod plugins;
 pub mod rules;

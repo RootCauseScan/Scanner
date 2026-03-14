@@ -1,0 +1,8 @@
+# Rule must declare languages; no path inference. PHP files must NOT get this rule.
+rules:
+  - id: py.no-eval
+    message: Avoid eval on dynamic input
+    severity: ERROR
+    category: python
+    languages: [python]
+    pattern: "eval(...)"

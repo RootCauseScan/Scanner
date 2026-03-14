@@ -1,6 +1,6 @@
 [package]
 name = "rootcause"
-version = "1.0.0"
+version = "0.0.1"
 edition = "2021"
 description = "Command-line interface for the RootCause static analysis toolkit"
 readme = "README.md"

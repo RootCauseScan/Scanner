@@ -3,36 +3,14 @@
 //! scanning logic, plugin management and output formatting.
 
 use rootcause::args::{parse_cli, Commands, RulesCmd};
+use rootcause::error_log::append_error_log;
 use rootcause::plugins::handle_plugin;
 use rootcause::rules::{inspect_rules, verify_rules};
 use rootcause::rules::{install_ruleset, list_rulesets, remove_ruleset, update_ruleset};
 use rootcause::scan::run_scan;
 use std::backtrace::Backtrace;
-use std::fs::OpenOptions;
-use std::io::Write;
 use std::panic::PanicHookInfo;
 use std::process::ExitCode;
-use std::time::{SystemTime, UNIX_EPOCH};
-
-fn now_unix_secs() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
-}
-
-fn append_error_log(kind: &str, details: &str) {
-    let mut file = match OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open("rootcause.error.log")
-    {
-        Ok(file) => file,
-        Err(_) => return,
-    };
-
-    let _ = writeln!(file, "[{}] kind={kind}\n{details}\n---", now_unix_secs());
-}
 
 fn panic_payload_to_string(info: &PanicHookInfo<'_>) -> String {
     if let Some(msg) = info.payload().downcast_ref::<&str>() {

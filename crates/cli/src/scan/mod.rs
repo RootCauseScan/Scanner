@@ -11,6 +11,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::args::ScanArgs;
 use crate::config::{config_dir, load_config, save_config};
+use crate::error_log::append_error_log;
 use crate::output::{self, Format};
 use crate::{default_excludes, is_excluded, load_ignore_patterns, ui};
 
@@ -220,10 +221,6 @@ pub fn update_files_from_transform(
 }
 
 fn append_analysis_error_log(kind: &str, details: &str, args: &ScanArgs, files_analyzed: usize) {
-    let timestamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
     let cwd = std::env::current_dir()
         .map(|path| path.display().to_string())
         .unwrap_or_else(|_| "<unavailable>".to_string());
@@ -238,7 +235,7 @@ fn append_analysis_error_log(kind: &str, details: &str, args: &ScanArgs, files_a
             .join(",")
     };
     let context = format!(
-        "kind={kind}\n{}\nprocess.pid={}\nprocess.cwd={cwd}\nprocess.argv={command_args}\nenv.RUST_BACKTRACE={}\nscan.path={}\nscan.rules={}\nscan.plugins={plugin_paths}\nscan.plugin_config={}\nscan.fail_on={}\nscan.timeout_operation_ms={}\nscan.max_file_size={}\nscan.threads={}\nscan.files_analyzed={files_analyzed}\nscan.output_format={:?}",
+        "{}\nprocess.pid={}\nprocess.cwd={cwd}\nprocess.argv={command_args}\nenv.RUST_BACKTRACE={}\nscan.path={}\nscan.rules={}\nscan.plugins={plugin_paths}\nscan.plugin_config={}\nscan.fail_on={}\nscan.timeout_operation_ms={}\nscan.max_file_size={}\nscan.threads={}\nscan.files_analyzed={files_analyzed}\nscan.output_format={:?}",
         details.trim_end(),
         std::process::id(),
         std::env::var("RUST_BACKTRACE").unwrap_or_else(|_| "<unset>".to_string()),
@@ -261,13 +258,7 @@ fn append_analysis_error_log(kind: &str, details: &str, args: &ScanArgs, files_a
 
     error!("{context}");
 
-    if let Ok(mut file) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open("rootcause.error.log")
-    {
-        let _ = writeln!(file, "[{timestamp}]\n{context}\n---");
-    }
+    append_error_log(kind, &context);
 }
 
 fn collect_scan_languages(files: &[InputFile]) -> HashSet<String> {

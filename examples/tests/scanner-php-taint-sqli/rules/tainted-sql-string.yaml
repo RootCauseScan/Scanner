@@ -1,0 +1,33 @@
+# Regression: scanner must detect tainted SQL in PHP (well-written rule).
+# Sources: $_GET/$_POST etc. Sinks: string concat into SQL. Sanitizers: mysqli_real_escape_string.
+rules:
+  - id: php-tainted-sql-string
+    languages:
+      - php
+    severity: ERROR
+    message: User data flows into SQL string (possible SQL injection).
+    mode: taint
+    pattern-sanitizers:
+      - pattern-either:
+          - pattern: mysqli_real_escape_string(...)
+          - pattern: real_escape_string(...)
+    pattern-sources:
+      - patterns:
+          - pattern-either:
+              - pattern: $_GET
+              - pattern: $_POST
+              - pattern: $_REQUEST
+    pattern-sinks:
+      - pattern-either:
+          - patterns:
+              - pattern: |
+                  "$SQLSTR".$EXPR
+              - metavariable-regex:
+                  metavariable: $SQLSTR
+                  regex: (?is).*\b(select|delete|insert|create|update|alter|drop)\b.*
+          - patterns:
+              - pattern: |
+                  "...$EXPR..."
+              - metavariable-regex:
+                  metavariable: $EXPR
+                  regex: (?is).*\b(select|delete|insert|create|update|alter|drop)\b.*
