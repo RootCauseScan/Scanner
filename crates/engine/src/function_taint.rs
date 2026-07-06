@@ -167,7 +167,7 @@ fn tainted_vars(file: &FileIR) -> HashSet<String> {
     out
 }
 
-pub(crate) fn parse_call(code: &str) -> Option<(String, Vec<String>)> {
+pub fn parse_call(code: &str) -> Option<(String, Vec<String>)> {
     let call = code.trim();
     let mut open = None;
     let mut paren = 0usize;

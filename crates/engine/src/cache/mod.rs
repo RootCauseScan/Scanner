@@ -64,6 +64,10 @@ pub fn hash_file(file: &FileIR) -> String {
     } else {
         let bytes = serde_json::to_vec(&file.nodes).unwrap_or_default();
         hasher.update(&bytes);
+        if let Some(ast) = &file.ast {
+            let ast_bytes = serde_json::to_vec(ast).unwrap_or_default();
+            hasher.update(&ast_bytes);
+        }
     }
     hasher.finalize().to_hex().to_string()
 }

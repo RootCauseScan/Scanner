@@ -87,6 +87,8 @@ fn debug_php_good_dfg() {
 }
 
 #[test]
+
+#[test]
 fn finds_multi_step_path() {
     let mut file = FileIR::new("test".into(), "python".into());
     let dfg = DataFlowGraph {

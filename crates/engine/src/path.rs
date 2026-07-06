@@ -10,14 +10,11 @@ pub static CANONICAL_STATS: OnceLock<CacheStats> = OnceLock::new();
 pub static CANONICAL_ORDER: OnceLock<RwLock<VecDeque<PathBuf>>> = OnceLock::new();
 static PATH_REGEX_CACHE: OnceLock<Mutex<PathRegexCache>> = OnceLock::new();
 
-#[cfg(test)]
-pub const CANONICAL_CACHE_CAPACITY: usize = 3;
-#[cfg(not(test))]
-pub const CANONICAL_CACHE_CAPACITY: usize = 1024;
+// Runtime-configurable capacities (default 1024; tests can lower them)
+static CANONICAL_RUNTIME_CAPACITY: AtomicUsize = AtomicUsize::new(1024);
+static PATH_REGEX_RUNTIME_CAPACITY: AtomicUsize = AtomicUsize::new(1024);
 
-#[cfg(test)]
-pub const PATH_REGEX_CACHE_CAPACITY: usize = 3;
-#[cfg(not(test))]
+pub const CANONICAL_CACHE_CAPACITY: usize = 1024;
 pub const PATH_REGEX_CACHE_CAPACITY: usize = 1024;
 
 #[derive(Default)]
@@ -29,15 +26,13 @@ pub struct CacheStats {
 struct PathRegexCache {
     map: HashMap<String, Regex>,
     order: VecDeque<String>,
-    capacity: usize,
 }
 
 impl PathRegexCache {
-    fn new(capacity: usize) -> Self {
+    fn new() -> Self {
         Self {
             map: HashMap::new(),
             order: VecDeque::new(),
-            capacity,
         }
     }
 
@@ -50,7 +45,7 @@ impl PathRegexCache {
         None
     }
 
-    fn insert(&mut self, key: String, value: Regex) {
+    fn insert(&mut self, key: String, value: Regex, capacity: usize) {
         if self.map.contains_key(&key) {
             if let Some(pos) = self.order.iter().position(|k| k == &key) {
                 self.order.remove(pos);
@@ -58,25 +53,22 @@ impl PathRegexCache {
         }
         self.order.push_back(key.clone());
         self.map.insert(key, value);
-        if self.order.len() > self.capacity {
+        if self.order.len() > capacity {
             if let Some(oldest) = self.order.pop_front() {
                 self.map.remove(&oldest);
             }
         }
     }
 
-    #[cfg(test)]
     fn clear(&mut self) {
         self.map.clear();
         self.order.clear();
     }
 
-    #[cfg(test)]
     fn len(&self) -> usize {
         self.map.len()
     }
 
-    #[cfg(test)]
     fn contains(&self, key: &str) -> bool {
         self.map.contains_key(key)
     }
@@ -116,7 +108,8 @@ pub fn canonicalize_path<P: AsRef<Path>>(path: P) -> PathBuf {
     let mut ord = order.write().unwrap_or_else(|e| e.into_inner());
     map.insert(path_ref.to_path_buf(), canonical.clone());
     ord.push_back(path_ref.to_path_buf());
-    if ord.len() > CANONICAL_CACHE_CAPACITY {
+    let cap = CANONICAL_RUNTIME_CAPACITY.load(Ordering::Relaxed);
+    if ord.len() > cap {
         if let Some(oldest) = ord.pop_front() {
             map.remove(&oldest);
         }
@@ -132,7 +125,6 @@ pub(crate) fn cache_stats() -> (usize, usize) {
     )
 }
 
-#[cfg(test)]
 pub fn reset_canonical_cache() {
     if let Some(map) = CANONICAL_PATHS.get() {
         map.write().unwrap_or_else(|e| e.into_inner()).clear();
@@ -146,19 +138,27 @@ pub fn reset_canonical_cache() {
     }
 }
 
-#[cfg(test)]
 pub fn canonical_cache_stats() -> (usize, usize) {
     cache_stats()
 }
 
-#[cfg(test)]
 pub fn reset_path_regex_cache() {
     if let Some(cache) = PATH_REGEX_CACHE.get() {
         cache.lock().unwrap().clear();
     }
 }
 
-#[cfg(test)]
+/// Override the regex cache capacity for testing. Resets the cache.
+pub fn set_path_regex_cache_capacity(n: usize) {
+    PATH_REGEX_RUNTIME_CAPACITY.store(n, Ordering::Relaxed);
+    reset_path_regex_cache();
+}
+
+/// Override the canonical path cache capacity for testing.
+pub fn set_canonical_cache_capacity(n: usize) {
+    CANONICAL_RUNTIME_CAPACITY.store(n, Ordering::Relaxed);
+}
+
 pub fn path_regex_cache_size() -> usize {
     PATH_REGEX_CACHE
         .get()
@@ -166,7 +166,6 @@ pub fn path_regex_cache_size() -> usize {
         .unwrap_or(0)
 }
 
-#[cfg(test)]
 pub fn path_regex_cache_contains(pat: &str) -> bool {
     PATH_REGEX_CACHE
         .get()
@@ -176,7 +175,7 @@ pub fn path_regex_cache_contains(pat: &str) -> bool {
 
 pub fn path_matches(pattern: &str, candidate: &str) -> bool {
     let cache =
-        PATH_REGEX_CACHE.get_or_init(|| Mutex::new(PathRegexCache::new(PATH_REGEX_CACHE_CAPACITY)));
+        PATH_REGEX_CACHE.get_or_init(|| Mutex::new(PathRegexCache::new()));
     let mut cache = cache.lock().expect("path regex cache lock poisoned");
     if let Some(rx) = cache.get(pattern) {
         return rx.is_match(candidate);
@@ -194,7 +193,8 @@ pub fn path_matches(pattern: &str, candidate: &str) -> bool {
     match Regex::new(&re) {
         Ok(rx) => {
             let is_match = rx.is_match(candidate);
-            cache.insert(pattern.to_string(), rx);
+            let cap = PATH_REGEX_RUNTIME_CAPACITY.load(Ordering::Relaxed);
+            cache.insert(pattern.to_string(), rx, cap);
             is_match
         }
         Err(_) => false,

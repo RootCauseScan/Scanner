@@ -1,10 +1,9 @@
 ---
 source: crates/debugger/tests/ir_exports.rs
-assertion_line: 26
 expression: ast.to_json().unwrap()
 ---
 {
-  "file_path": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+  "file_path": "/home/user/Scanner/examples/fixtures/python/py.no-eval/bad.py",
   "file_type": "python",
   "nodes": [
     {
@@ -20,7 +19,7 @@ expression: ast.to_json().unwrap()
           "value": null,
           "children": [],
           "meta": {
-            "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+            "file": "/home/user/Scanner/examples/fixtures/python/py.no-eval/bad.py",
             "line": 1,
             "column": 1
           }
@@ -32,7 +31,7 @@ expression: ast.to_json().unwrap()
           "value": null,
           "children": [],
           "meta": {
-            "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+            "file": "/home/user/Scanner/examples/fixtures/python/py.no-eval/bad.py",
             "line": 1,
             "column": 5
           }
@@ -50,7 +49,7 @@ expression: ast.to_json().unwrap()
               "value": null,
               "children": [],
               "meta": {
-                "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+                "file": "/home/user/Scanner/examples/fixtures/python/py.no-eval/bad.py",
                 "line": 1,
                 "column": 11
               }
@@ -62,7 +61,7 @@ expression: ast.to_json().unwrap()
               "value": null,
               "children": [],
               "meta": {
-                "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+                "file": "/home/user/Scanner/examples/fixtures/python/py.no-eval/bad.py",
                 "line": 1,
                 "column": 12
               }
@@ -74,14 +73,14 @@ expression: ast.to_json().unwrap()
               "value": null,
               "children": [],
               "meta": {
-                "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+                "file": "/home/user/Scanner/examples/fixtures/python/py.no-eval/bad.py",
                 "line": 1,
                 "column": 16
               }
             }
           ],
           "meta": {
-            "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+            "file": "/home/user/Scanner/examples/fixtures/python/py.no-eval/bad.py",
             "line": 1,
             "column": 11
           }
@@ -93,7 +92,7 @@ expression: ast.to_json().unwrap()
           "value": null,
           "children": [],
           "meta": {
-            "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+            "file": "/home/user/Scanner/examples/fixtures/python/py.no-eval/bad.py",
             "line": 1,
             "column": 17
           }
@@ -123,7 +122,7 @@ expression: ast.to_json().unwrap()
                       "value": null,
                       "children": [],
                       "meta": {
-                        "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+                        "file": "/home/user/Scanner/examples/fixtures/python/py.no-eval/bad.py",
                         "line": 2,
                         "column": 5
                       }
@@ -141,7 +140,7 @@ expression: ast.to_json().unwrap()
                           "value": null,
                           "children": [],
                           "meta": {
-                            "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+                            "file": "/home/user/Scanner/examples/fixtures/python/py.no-eval/bad.py",
                             "line": 2,
                             "column": 9
                           }
@@ -153,7 +152,7 @@ expression: ast.to_json().unwrap()
                           "value": null,
                           "children": [],
                           "meta": {
-                            "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+                            "file": "/home/user/Scanner/examples/fixtures/python/py.no-eval/bad.py",
                             "line": 2,
                             "column": 10
                           }
@@ -165,42 +164,42 @@ expression: ast.to_json().unwrap()
                           "value": null,
                           "children": [],
                           "meta": {
-                            "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+                            "file": "/home/user/Scanner/examples/fixtures/python/py.no-eval/bad.py",
                             "line": 2,
                             "column": 14
                           }
                         }
                       ],
                       "meta": {
-                        "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+                        "file": "/home/user/Scanner/examples/fixtures/python/py.no-eval/bad.py",
                         "line": 2,
                         "column": 9
                       }
                     }
                   ],
                   "meta": {
-                    "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+                    "file": "/home/user/Scanner/examples/fixtures/python/py.no-eval/bad.py",
                     "line": 2,
                     "column": 5
                   }
                 }
               ],
               "meta": {
-                "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+                "file": "/home/user/Scanner/examples/fixtures/python/py.no-eval/bad.py",
                 "line": 2,
                 "column": 5
               }
             }
           ],
           "meta": {
-            "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+            "file": "/home/user/Scanner/examples/fixtures/python/py.no-eval/bad.py",
             "line": 2,
             "column": 5
           }
         }
       ],
       "meta": {
-        "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+        "file": "/home/user/Scanner/examples/fixtures/python/py.no-eval/bad.py",
         "line": 1,
         "column": 1
       }
@@ -220,7 +219,7 @@ expression: ast.to_json().unwrap()
           "value": null,
           "children": [],
           "meta": {
-            "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+            "file": "/home/user/Scanner/examples/fixtures/python/py.no-eval/bad.py",
             "line": 1,
             "column": 1
           }
@@ -232,7 +231,7 @@ expression: ast.to_json().unwrap()
           "value": null,
           "children": [],
           "meta": {
-            "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+            "file": "/home/user/Scanner/examples/fixtures/python/py.no-eval/bad.py",
             "line": 1,
             "column": 5
           }
@@ -250,7 +249,7 @@ expression: ast.to_json().unwrap()
               "value": null,
               "children": [],
               "meta": {
-                "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+                "file": "/home/user/Scanner/examples/fixtures/python/py.no-eval/bad.py",
                 "line": 1,
                 "column": 11
               }
@@ -262,7 +261,7 @@ expression: ast.to_json().unwrap()
               "value": null,
               "children": [],
               "meta": {
-                "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+                "file": "/home/user/Scanner/examples/fixtures/python/py.no-eval/bad.py",
                 "line": 1,
                 "column": 12
               }
@@ -274,14 +273,14 @@ expression: ast.to_json().unwrap()
               "value": null,
               "children": [],
               "meta": {
-                "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+                "file": "/home/user/Scanner/examples/fixtures/python/py.no-eval/bad.py",
                 "line": 1,
                 "column": 16
               }
             }
           ],
           "meta": {
-            "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+            "file": "/home/user/Scanner/examples/fixtures/python/py.no-eval/bad.py",
             "line": 1,
             "column": 11
           }
@@ -293,7 +292,7 @@ expression: ast.to_json().unwrap()
           "value": null,
           "children": [],
           "meta": {
-            "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+            "file": "/home/user/Scanner/examples/fixtures/python/py.no-eval/bad.py",
             "line": 1,
             "column": 17
           }
@@ -323,7 +322,7 @@ expression: ast.to_json().unwrap()
                       "value": null,
                       "children": [],
                       "meta": {
-                        "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+                        "file": "/home/user/Scanner/examples/fixtures/python/py.no-eval/bad.py",
                         "line": 2,
                         "column": 5
                       }
@@ -341,7 +340,7 @@ expression: ast.to_json().unwrap()
                           "value": null,
                           "children": [],
                           "meta": {
-                            "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+                            "file": "/home/user/Scanner/examples/fixtures/python/py.no-eval/bad.py",
                             "line": 2,
                             "column": 9
                           }
@@ -353,7 +352,7 @@ expression: ast.to_json().unwrap()
                           "value": null,
                           "children": [],
                           "meta": {
-                            "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+                            "file": "/home/user/Scanner/examples/fixtures/python/py.no-eval/bad.py",
                             "line": 2,
                             "column": 10
                           }
@@ -365,42 +364,42 @@ expression: ast.to_json().unwrap()
                           "value": null,
                           "children": [],
                           "meta": {
-                            "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+                            "file": "/home/user/Scanner/examples/fixtures/python/py.no-eval/bad.py",
                             "line": 2,
                             "column": 14
                           }
                         }
                       ],
                       "meta": {
-                        "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+                        "file": "/home/user/Scanner/examples/fixtures/python/py.no-eval/bad.py",
                         "line": 2,
                         "column": 9
                       }
                     }
                   ],
                   "meta": {
-                    "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+                    "file": "/home/user/Scanner/examples/fixtures/python/py.no-eval/bad.py",
                     "line": 2,
                     "column": 5
                   }
                 }
               ],
               "meta": {
-                "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+                "file": "/home/user/Scanner/examples/fixtures/python/py.no-eval/bad.py",
                 "line": 2,
                 "column": 5
               }
             }
           ],
           "meta": {
-            "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+            "file": "/home/user/Scanner/examples/fixtures/python/py.no-eval/bad.py",
             "line": 2,
             "column": 5
           }
         }
       ],
       "meta": {
-        "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+        "file": "/home/user/Scanner/examples/fixtures/python/py.no-eval/bad.py",
         "line": 1,
         "column": 1
       }
@@ -412,7 +411,7 @@ expression: ast.to_json().unwrap()
       "value": null,
       "children": [],
       "meta": {
-        "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+        "file": "/home/user/Scanner/examples/fixtures/python/py.no-eval/bad.py",
         "line": 1,
         "column": 1
       }
@@ -424,7 +423,7 @@ expression: ast.to_json().unwrap()
       "value": null,
       "children": [],
       "meta": {
-        "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+        "file": "/home/user/Scanner/examples/fixtures/python/py.no-eval/bad.py",
         "line": 1,
         "column": 5
       }
@@ -442,7 +441,7 @@ expression: ast.to_json().unwrap()
           "value": null,
           "children": [],
           "meta": {
-            "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+            "file": "/home/user/Scanner/examples/fixtures/python/py.no-eval/bad.py",
             "line": 1,
             "column": 11
           }
@@ -454,7 +453,7 @@ expression: ast.to_json().unwrap()
           "value": null,
           "children": [],
           "meta": {
-            "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+            "file": "/home/user/Scanner/examples/fixtures/python/py.no-eval/bad.py",
             "line": 1,
             "column": 12
           }
@@ -466,14 +465,14 @@ expression: ast.to_json().unwrap()
           "value": null,
           "children": [],
           "meta": {
-            "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+            "file": "/home/user/Scanner/examples/fixtures/python/py.no-eval/bad.py",
             "line": 1,
             "column": 16
           }
         }
       ],
       "meta": {
-        "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+        "file": "/home/user/Scanner/examples/fixtures/python/py.no-eval/bad.py",
         "line": 1,
         "column": 11
       }
@@ -485,7 +484,7 @@ expression: ast.to_json().unwrap()
       "value": null,
       "children": [],
       "meta": {
-        "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+        "file": "/home/user/Scanner/examples/fixtures/python/py.no-eval/bad.py",
         "line": 1,
         "column": 11
       }
@@ -497,7 +496,7 @@ expression: ast.to_json().unwrap()
       "value": null,
       "children": [],
       "meta": {
-        "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+        "file": "/home/user/Scanner/examples/fixtures/python/py.no-eval/bad.py",
         "line": 1,
         "column": 12
       }
@@ -509,7 +508,7 @@ expression: ast.to_json().unwrap()
       "value": null,
       "children": [],
       "meta": {
-        "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+        "file": "/home/user/Scanner/examples/fixtures/python/py.no-eval/bad.py",
         "line": 1,
         "column": 16
       }
@@ -521,7 +520,7 @@ expression: ast.to_json().unwrap()
       "value": null,
       "children": [],
       "meta": {
-        "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+        "file": "/home/user/Scanner/examples/fixtures/python/py.no-eval/bad.py",
         "line": 1,
         "column": 17
       }
@@ -551,7 +550,7 @@ expression: ast.to_json().unwrap()
                   "value": null,
                   "children": [],
                   "meta": {
-                    "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+                    "file": "/home/user/Scanner/examples/fixtures/python/py.no-eval/bad.py",
                     "line": 2,
                     "column": 5
                   }
@@ -569,7 +568,7 @@ expression: ast.to_json().unwrap()
                       "value": null,
                       "children": [],
                       "meta": {
-                        "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+                        "file": "/home/user/Scanner/examples/fixtures/python/py.no-eval/bad.py",
                         "line": 2,
                         "column": 9
                       }
@@ -581,7 +580,7 @@ expression: ast.to_json().unwrap()
                       "value": null,
                       "children": [],
                       "meta": {
-                        "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+                        "file": "/home/user/Scanner/examples/fixtures/python/py.no-eval/bad.py",
                         "line": 2,
                         "column": 10
                       }
@@ -593,35 +592,35 @@ expression: ast.to_json().unwrap()
                       "value": null,
                       "children": [],
                       "meta": {
-                        "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+                        "file": "/home/user/Scanner/examples/fixtures/python/py.no-eval/bad.py",
                         "line": 2,
                         "column": 14
                       }
                     }
                   ],
                   "meta": {
-                    "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+                    "file": "/home/user/Scanner/examples/fixtures/python/py.no-eval/bad.py",
                     "line": 2,
                     "column": 9
                   }
                 }
               ],
               "meta": {
-                "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+                "file": "/home/user/Scanner/examples/fixtures/python/py.no-eval/bad.py",
                 "line": 2,
                 "column": 5
               }
             }
           ],
           "meta": {
-            "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+            "file": "/home/user/Scanner/examples/fixtures/python/py.no-eval/bad.py",
             "line": 2,
             "column": 5
           }
         }
       ],
       "meta": {
-        "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+        "file": "/home/user/Scanner/examples/fixtures/python/py.no-eval/bad.py",
         "line": 2,
         "column": 5
       }
@@ -645,7 +644,7 @@ expression: ast.to_json().unwrap()
               "value": null,
               "children": [],
               "meta": {
-                "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+                "file": "/home/user/Scanner/examples/fixtures/python/py.no-eval/bad.py",
                 "line": 2,
                 "column": 5
               }
@@ -663,7 +662,7 @@ expression: ast.to_json().unwrap()
                   "value": null,
                   "children": [],
                   "meta": {
-                    "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+                    "file": "/home/user/Scanner/examples/fixtures/python/py.no-eval/bad.py",
                     "line": 2,
                     "column": 9
                   }
@@ -675,7 +674,7 @@ expression: ast.to_json().unwrap()
                   "value": null,
                   "children": [],
                   "meta": {
-                    "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+                    "file": "/home/user/Scanner/examples/fixtures/python/py.no-eval/bad.py",
                     "line": 2,
                     "column": 10
                   }
@@ -687,28 +686,28 @@ expression: ast.to_json().unwrap()
                   "value": null,
                   "children": [],
                   "meta": {
-                    "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+                    "file": "/home/user/Scanner/examples/fixtures/python/py.no-eval/bad.py",
                     "line": 2,
                     "column": 14
                   }
                 }
               ],
               "meta": {
-                "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+                "file": "/home/user/Scanner/examples/fixtures/python/py.no-eval/bad.py",
                 "line": 2,
                 "column": 9
               }
             }
           ],
           "meta": {
-            "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+            "file": "/home/user/Scanner/examples/fixtures/python/py.no-eval/bad.py",
             "line": 2,
             "column": 5
           }
         }
       ],
       "meta": {
-        "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+        "file": "/home/user/Scanner/examples/fixtures/python/py.no-eval/bad.py",
         "line": 2,
         "column": 5
       }
@@ -726,7 +725,7 @@ expression: ast.to_json().unwrap()
           "value": null,
           "children": [],
           "meta": {
-            "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+            "file": "/home/user/Scanner/examples/fixtures/python/py.no-eval/bad.py",
             "line": 2,
             "column": 5
           }
@@ -744,7 +743,7 @@ expression: ast.to_json().unwrap()
               "value": null,
               "children": [],
               "meta": {
-                "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+                "file": "/home/user/Scanner/examples/fixtures/python/py.no-eval/bad.py",
                 "line": 2,
                 "column": 9
               }
@@ -756,7 +755,7 @@ expression: ast.to_json().unwrap()
               "value": null,
               "children": [],
               "meta": {
-                "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+                "file": "/home/user/Scanner/examples/fixtures/python/py.no-eval/bad.py",
                 "line": 2,
                 "column": 10
               }
@@ -768,21 +767,21 @@ expression: ast.to_json().unwrap()
               "value": null,
               "children": [],
               "meta": {
-                "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+                "file": "/home/user/Scanner/examples/fixtures/python/py.no-eval/bad.py",
                 "line": 2,
                 "column": 14
               }
             }
           ],
           "meta": {
-            "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+            "file": "/home/user/Scanner/examples/fixtures/python/py.no-eval/bad.py",
             "line": 2,
             "column": 9
           }
         }
       ],
       "meta": {
-        "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+        "file": "/home/user/Scanner/examples/fixtures/python/py.no-eval/bad.py",
         "line": 2,
         "column": 5
       }
@@ -794,7 +793,7 @@ expression: ast.to_json().unwrap()
       "value": null,
       "children": [],
       "meta": {
-        "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+        "file": "/home/user/Scanner/examples/fixtures/python/py.no-eval/bad.py",
         "line": 2,
         "column": 5
       }
@@ -812,7 +811,7 @@ expression: ast.to_json().unwrap()
           "value": null,
           "children": [],
           "meta": {
-            "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+            "file": "/home/user/Scanner/examples/fixtures/python/py.no-eval/bad.py",
             "line": 2,
             "column": 9
           }
@@ -824,7 +823,7 @@ expression: ast.to_json().unwrap()
           "value": null,
           "children": [],
           "meta": {
-            "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+            "file": "/home/user/Scanner/examples/fixtures/python/py.no-eval/bad.py",
             "line": 2,
             "column": 10
           }
@@ -836,14 +835,14 @@ expression: ast.to_json().unwrap()
           "value": null,
           "children": [],
           "meta": {
-            "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+            "file": "/home/user/Scanner/examples/fixtures/python/py.no-eval/bad.py",
             "line": 2,
             "column": 14
           }
         }
       ],
       "meta": {
-        "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+        "file": "/home/user/Scanner/examples/fixtures/python/py.no-eval/bad.py",
         "line": 2,
         "column": 9
       }
@@ -855,7 +854,7 @@ expression: ast.to_json().unwrap()
       "value": null,
       "children": [],
       "meta": {
-        "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+        "file": "/home/user/Scanner/examples/fixtures/python/py.no-eval/bad.py",
         "line": 2,
         "column": 9
       }
@@ -867,7 +866,7 @@ expression: ast.to_json().unwrap()
       "value": null,
       "children": [],
       "meta": {
-        "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+        "file": "/home/user/Scanner/examples/fixtures/python/py.no-eval/bad.py",
         "line": 2,
         "column": 10
       }
@@ -879,7 +878,7 @@ expression: ast.to_json().unwrap()
       "value": null,
       "children": [],
       "meta": {
-        "file": "/workspace/rust-sast/examples/fixtures/python/py.no-eval/bad.py",
+        "file": "/home/user/Scanner/examples/fixtures/python/py.no-eval/bad.py",
         "line": 2,
         "column": 14
       }

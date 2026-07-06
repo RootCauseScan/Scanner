@@ -122,8 +122,13 @@ pub(crate) fn normalize_languages(langs: Option<Vec<String>>) -> Vec<String> {
                 continue;
             }
             let lower = trimmed.to_lowercase();
-            if seen.insert(lower.clone()) {
-                normalized.push(lower);
+            let mapped = if lower == "regex" {
+                GENERIC_LANGUAGE.to_string()
+            } else {
+                lower
+            };
+            if seen.insert(mapped.clone()) {
+                normalized.push(mapped);
             }
         }
     }

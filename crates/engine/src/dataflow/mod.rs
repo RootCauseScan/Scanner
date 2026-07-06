@@ -67,8 +67,7 @@ fn walk(
                     edges
                         .entry(caller.clone())
                         .or_default()
-                        .insert(callee.clone());
-                    edges.entry(callee).or_default().insert(caller.clone());
+                        .insert(callee);
                 }
             }
         }
@@ -78,7 +77,7 @@ fn walk(
     }
 }
 
-fn parse_call(code: &str) -> Option<(String, Vec<String>)> {
+pub fn parse_call(code: &str) -> Option<(String, Vec<String>)> {
     let call = code.trim();
     let mut open = None;
     let mut paren = 0usize;

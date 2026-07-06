@@ -845,7 +845,12 @@ pub fn parse_php(content: &str, fir: &mut FileIR) -> Result<()> {
                                 dfg.edges.push((src_id, id));
                             }
                             // Create Use nodes for vars on RHS so taint can flow to a sink (e.g. "SELECT" . $id)
+                            // Skip superglobals — their Def node already represents the taint root;
+                            // adding a Use here creates a false sink in the middle of the assignment.
                             for v in &rhs_vars {
+                                if SUPERGLOBALS.contains(&v.as_str()) {
+                                    continue;
+                                }
                                 if let Some(sym) = fir.symbols.get(v) {
                                     if let Some(def_id) = sym.def {
                                         let use_id = dfg.nodes.len();

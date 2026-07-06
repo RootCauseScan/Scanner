@@ -12,7 +12,7 @@ use serde_yaml::{self, Value as YamlValue};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::OnceLock;
-use tracing::debug;
+use tracing::{debug, warn};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 /// Subset of rules compatible con Semgrep.
@@ -65,6 +65,48 @@ fn normalize_metavariable_regex(raw: &str) -> String {
     raw.replace("\\A", "^")
         .replace("\\Z", "$")
         .replace("\\z", "$")
+}
+
+/// Extracts the bare function name from a Semgrep pattern string.
+/// E.g. "request.getParameter(...)" → "getParameter", "System.exec(...)" → "exec".
+fn extract_fn_name_from_pattern(pat: &str) -> Option<String> {
+    let call_pos = pat.find('(')?;
+    let before = pat[..call_pos].trim();
+    if before.is_empty() {
+        return None;
+    }
+    let name = before
+        .rsplit(|c| c == '.' || c == ':')
+        .next()
+        .unwrap_or(before)
+        .trim();
+    if name.is_empty() || name.starts_with('$') {
+        return None;
+    }
+    let ident_re = Regex::new(r"^[A-Za-z_][A-Za-z0-9_]*$").expect("valid");
+    if ident_re.is_match(name) {
+        Some(name.to_string())
+    } else {
+        None
+    }
+}
+
+/// Walks a YAML taint pattern entry and collects function names from `pattern` values.
+fn collect_fn_names_from_yaml(entry: &YamlValue, out: &mut Vec<String>) {
+    if let Some(p) = entry.get("pattern").and_then(|v| v.as_str()) {
+        if let Some(name) = extract_fn_name_from_pattern(p.trim()) {
+            if !out.contains(&name) {
+                out.push(name);
+            }
+        }
+    }
+    for key in &["patterns", "pattern-either"] {
+        if let Some(arr) = entry.get(key).and_then(|v| v.as_sequence()) {
+            for item in arr {
+                collect_fn_names_from_yaml(item, out);
+            }
+        }
+    }
 }
 
 /// Compiles a regex string with PCRE2 support for pattern-regex and metavariable-regex,
@@ -615,6 +657,7 @@ fn compile_taint_patterns(
         mv: &HashMap<String, String>,
         pattern: &mut TaintPattern,
         focus: Option<&str>,
+        deny_parts: &mut Vec<String>,
     ) -> anyhow::Result<()> {
         if let Some(p) = entry.get("pattern").and_then(|v| v.as_str()) {
             let normalized = p
@@ -680,26 +723,35 @@ fn compile_taint_patterns(
                 .collect::<Vec<_>>()
                 .join("\n");
             let regex_str = semgrep_to_regex_exact(&combined, mv);
-            let re =
-                compile_regex_with_pcre2_fallback(&regex_str, false, "taint-pattern", "unknown")?;
-            pattern.deny = Some(re);
+            deny_parts.push(regex_str);
         }
         if let Some(arr) = entry.get("pattern-either").and_then(|v| v.as_sequence()) {
             for item in arr {
-                handle_entry(item, mv, pattern, focus)?;
+                handle_entry(item, mv, pattern, focus, deny_parts)?;
             }
         }
         if let Some(arr) = entry.get("patterns").and_then(|v| v.as_sequence()) {
             for item in arr {
-                handle_entry(item, mv, pattern, focus)?;
+                handle_entry(item, mv, pattern, focus, deny_parts)?;
             }
         }
         Ok(())
     }
 
     let mut pattern = TaintPattern::default();
+    let mut deny_parts: Vec<String> = Vec::new();
     for item in arr {
-        handle_entry(item, mv, &mut pattern, focus)?;
+        handle_entry(item, mv, &mut pattern, focus, &mut deny_parts)?;
+    }
+    if !deny_parts.is_empty() {
+        let cleaned: Vec<String> = deny_parts
+            .into_iter()
+            .map(|s| s.strip_prefix("(?s)").map(|x| x.to_string()).unwrap_or(s))
+            .collect();
+        let joined = cleaned.join(")|(?:");
+        let big = format!("(?s)(?:{joined})");
+        let re = compile_regex_with_pcre2_fallback(&big, false, "taint-pattern", "unknown")?;
+        pattern.deny = Some(re);
     }
     Ok(pattern)
 }
@@ -796,6 +848,18 @@ pub(crate) fn compile_semgrep_rule(
                 let mut tp = compile_taint_patterns(&single_item, &mv, focus.as_deref())?;
                 tp.focus = focus.clone();
                 sources.push(tp);
+            } else if let Some(raw_re) = src.get("pattern-regex").and_then(|v| v.as_str()) {
+                let re = compile_regex_with_pcre2_fallback(
+                    raw_re,
+                    true,
+                    &sr.id,
+                    source_file.as_deref().unwrap_or("unknown"),
+                )?;
+                let mut tp = TaintPattern::default();
+                tp.allow.push(re);
+                tp.allow_focus_groups.push(None);
+                tp.focus = focus.clone();
+                sources.push(tp);
             }
         }
     }
@@ -812,6 +876,18 @@ pub(crate) fn compile_semgrep_rule(
                 let mut tp = compile_taint_patterns(&single_item, &mv, focus.as_deref())?;
                 tp.focus = focus.clone();
                 sanitizers.push(tp);
+            } else if let Some(raw_re) = san.get("pattern-regex").and_then(|v| v.as_str()) {
+                let re = compile_regex_with_pcre2_fallback(
+                    raw_re,
+                    true,
+                    &sr.id,
+                    source_file.as_deref().unwrap_or("unknown"),
+                )?;
+                let mut tp = TaintPattern::default();
+                tp.allow.push(re);
+                tp.allow_focus_groups.push(None);
+                tp.focus = focus.clone();
+                sanitizers.push(tp);
             }
         }
     }
@@ -824,6 +900,17 @@ pub(crate) fn compile_semgrep_rule(
             } else if snk.get("pattern-either").is_some() || snk.get("pattern").is_some() {
                 let single_item = vec![snk];
                 sinks.push(compile_taint_patterns(&single_item, &mv, focus.as_deref())?);
+            } else if let Some(raw_re) = snk.get("pattern-regex").and_then(|v| v.as_str()) {
+                let re = compile_regex_with_pcre2_fallback(
+                    raw_re,
+                    true,
+                    &sr.id,
+                    source_file.as_deref().unwrap_or("unknown"),
+                )?;
+                let mut tp = TaintPattern::default();
+                tp.allow.push(re);
+                tp.allow_focus_groups.push(None);
+                sinks.push(tp);
             }
         }
     }
@@ -846,6 +933,18 @@ pub(crate) fn compile_semgrep_rule(
             sources.len(),
             sinks.len()
         );
+        let mut fn_sources: Vec<String> = Vec::new();
+        if let Some(arr) = &sr.pattern_sources {
+            for entry in arr {
+                collect_fn_names_from_yaml(entry, &mut fn_sources);
+            }
+        }
+        let mut fn_sinks: Vec<String> = Vec::new();
+        if let Some(arr) = &sr.pattern_sinks {
+            for entry in arr {
+                collect_fn_names_from_yaml(entry, &mut fn_sinks);
+            }
+        }
         let rule = CompiledRule {
             id: sr.id,
             severity,
@@ -861,8 +960,8 @@ pub(crate) fn compile_semgrep_rule(
                 sinks,
             },
             source_file: source_file.clone(),
-            sources: Vec::new(),
-            sinks: Vec::new(),
+            sources: fn_sources,
+            sinks: fn_sinks,
             languages: languages.clone(),
         };
         log_rule_summary(&rule);
@@ -935,6 +1034,12 @@ pub(crate) fn compile_semgrep_rule(
                     allow.push((re, pat));
                 }
             }
+        }
+        if allow.is_empty() && !deny_parts.is_empty() {
+            warn!(
+                rule_id = %sr.id,
+                "rule has only negation patterns (pattern-not) and no positive patterns — it will never fire"
+            );
         }
         if !allow.is_empty() {
             let deny = if !deny_parts.is_empty() {

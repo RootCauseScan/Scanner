@@ -27,8 +27,13 @@ shlex = { workspace = true }
 plugin_core = { path = "../plugin_core" }
 patterns = { path = "../patterns" }
 
+[[test]]
+name = "unit"
+path = "tests/unit/mod.rs"
+
 [dev-dependencies]
 parsers = { path = "../parsers" }
 tempfile = "3"
 tracing-subscriber = { workspace = true }
 base64 = { workspace = true }
+libc = "0.2"

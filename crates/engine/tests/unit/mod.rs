@@ -4,11 +4,13 @@ pub use ir::FileIR;
 use loader::Severity;
 use regex::Regex;
 use serde_json::json;
+use std::fs;
 use std::path::PathBuf;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
     OnceLock,
 };
+use std::time::Duration;
 use tempfile::tempdir;
 
 mod baseline;
@@ -33,7 +35,7 @@ mod wasm;
 static ROOT_USER_RE: OnceLock<Regex> = OnceLock::new();
 static FILE_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
-pub(super) fn mk_file_ir(nodes: Vec<(&str, &str, serde_json::Value)>) -> FileIR {
+pub fn mk_file_ir(nodes: Vec<(&str, &str, serde_json::Value)>) -> FileIR {
     let id = FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
     let file_path = format!("/tmp/file{id}");
     let mut fir = FileIR::new(file_path.clone(), "k8s".into());
@@ -721,6 +723,7 @@ fn rule_evaluation_is_cached() {
 #[test]
 fn rule_cache_evicts_oldest_entry() {
     let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    set_rule_cache_capacity(3);
     reset_rule_cache();
     let mut rules = RuleSet::default();
     let re = Regex::new("foo").unwrap();
@@ -765,4 +768,5 @@ fn rule_cache_evicts_oldest_entry() {
     let _ = eval_rule(&files[0], &rules.rules[0]);
     let (hits, misses) = rule_cache_stats();
     assert_eq!((hits, misses), (1, 5));
+    set_rule_cache_capacity(RULE_CACHE_CAPACITY);
 }

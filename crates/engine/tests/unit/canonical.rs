@@ -30,7 +30,7 @@ fn same_file_relative_and_absolute_have_same_id() -> anyhow::Result<()> {
         source_file: None,
         sources: vec![],
         sinks: vec![],
-        languages: vec!["k8s".into()],
+        languages: vec!["yaml".into()],
     });
 
     let mut dir = env::temp_dir();
@@ -86,7 +86,7 @@ fn different_files_produce_different_ids() -> anyhow::Result<()> {
         source_file: None,
         sources: vec![],
         sinks: vec![],
-        languages: vec!["k8s".into()],
+        languages: vec!["yaml".into()],
     });
 
     let mut dir = env::temp_dir();
@@ -228,6 +228,7 @@ fn reports_cache_hits_and_misses() {
 fn evicts_least_recently_used_and_counts_stats() {
     let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     reset_canonical_cache();
+    set_canonical_cache_capacity(3);
 
     let dir = tempfile::tempdir().unwrap();
     let paths: Vec<PathBuf> = (0..4)
@@ -274,6 +275,7 @@ fn evicts_least_recently_used_and_counts_stats() {
         assert_eq!(hits_final, hits_after_miss + 1);
         assert_eq!(misses_final, misses_after_miss);
     }
+    set_canonical_cache_capacity(CANONICAL_CACHE_CAPACITY);
 }
 
 #[test]

@@ -18,6 +18,7 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::thread_local;
 use std::time::{Duration, Instant};
@@ -31,7 +32,7 @@ pub mod cfg;
 pub mod dataflow;
 pub mod debug;
 pub mod dfg;
-mod function_taint;
+pub mod function_taint;
 mod hash;
 pub mod pattern;
 pub mod plugin;
@@ -46,14 +47,13 @@ pub use function_taint::{
 };
 mod path;
 use path::cache_stats;
-#[cfg(test)]
 pub use path::{
     canonical_cache_stats, path_regex_cache_contains, path_regex_cache_size, reset_canonical_cache,
     reset_path_regex_cache,
 };
 pub use path::{
-    canonicalize_path, path_matches, CANONICAL_CACHE_CAPACITY, CANONICAL_PATHS,
-    PATH_REGEX_CACHE_CAPACITY,
+    canonicalize_path, path_matches, set_canonical_cache_capacity, set_path_regex_cache_capacity,
+    CANONICAL_CACHE_CAPACITY, CANONICAL_PATHS, PATH_REGEX_CACHE_CAPACITY,
 };
 
 use crate::debug::emit;
@@ -113,6 +113,12 @@ pub fn find_taint_path(fir: &FileIR, source: &str, sink: &str) -> Option<Vec<usi
         .map(|(name, _)| name)
         .collect();
 
+    // If none of the sink_vars appear as DFG node names, the sink parameter is
+    // a function name rather than a variable — fall back to legacy mode (any
+    // unsanitized Use node is accepted as the sink endpoint).
+    let any_sink_node_exists = !sink_vars.is_empty()
+        && dfg.nodes.iter().any(|n| sink_vars.contains(&n.name));
+
     // Determine the source node name (strip leading '$' for PHP superglobals).
     let source_key = source.trim_start_matches('$');
 
@@ -158,8 +164,9 @@ pub fn find_taint_path(fir: &FileIR, source: &str, sink: &str) -> Option<Vec<usi
             );
 
         // Also accept the legacy condition (any unsanitized Use) when we have no
-        // sink variable information — this keeps existing PHP behaviour intact.
-        let legacy_sink = sink_vars.is_empty()
+        // sink variable information, or when the sink name doesn't correspond to
+        // any variable in the DFG (i.e. it's a function name like "sink").
+        let legacy_sink = !any_sink_node_exists
             && matches!(cur_node.kind, ir::DFNodeKind::Use)
             && is_unsanitized(fir, &cur_node.name);
 
@@ -251,7 +258,7 @@ thread_local! {
 }
 
 /// Pre-loads WASM instances for Rego rules and avoids repeated initialisations.
-fn warmup_wasm_rules(rules: &RuleSet) {
+pub fn warmup_wasm_rules(rules: &RuleSet) {
     init_tokio();
     let handle = Handle::try_current().unwrap_or_else(|_| tokio_handle());
     for rule in &rules.rules {
@@ -449,11 +456,23 @@ fn dedup_findings(findings: &mut Vec<Finding>) {
 }
 
 static RULE_CACHE: OnceLock<RuleCache> = OnceLock::new();
+static RULE_CACHE_RUNTIME_CAPACITY: AtomicUsize = AtomicUsize::new(1024);
+static SLOW_RULE_DELAYS: OnceLock<Mutex<HashMap<String, Duration>>> = OnceLock::new();
 
-#[cfg(test)]
-pub(crate) const RULE_CACHE_CAPACITY: usize = 3;
-#[cfg(not(test))]
-pub(crate) const RULE_CACHE_CAPACITY: usize = 1024;
+pub const RULE_CACHE_CAPACITY: usize = 1024;
+
+pub fn set_rule_cache_capacity(n: usize) {
+    RULE_CACHE_RUNTIME_CAPACITY.store(n, Ordering::Relaxed);
+    reset_rule_cache();
+}
+
+pub fn register_slow_rule_delay(rule_id: &str, delay: Duration) {
+    let registry = SLOW_RULE_DELAYS.get_or_init(|| Mutex::new(HashMap::new()));
+    registry
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(rule_id.to_string(), delay);
+}
 
 fn rule_cache_stats_inner() -> (usize, usize) {
     rule_cache().stats()
@@ -465,12 +484,11 @@ pub fn reset_rule_cache() {
     }
 }
 
-#[cfg(test)]
 pub fn rule_cache_stats() -> (usize, usize) {
     rule_cache_stats_inner()
 }
 
-fn eval_rule(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
+pub fn eval_rule(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
     debug!(
         "eval_rule: Starting evaluation of rule '{}' for file '{}'",
         rule.id, file.file_path
@@ -478,9 +496,11 @@ fn eval_rule(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
     let key = RuleCacheKey {
         file: PathBuf::from(&file.file_path),
         rule_id: rule.id.clone(),
+        content_hash: cache::hash_file(file),
     };
 
-    let (result, hit) = rule_cache().get_or_insert(key, RULE_CACHE_CAPACITY, || {
+    let cap = RULE_CACHE_RUNTIME_CAPACITY.load(Ordering::Relaxed);
+    let (result, hit) = rule_cache().get_or_insert(key, cap, || {
         debug!(
             "eval_rule: Calling eval_rule_impl for rule '{}' and file '{}'",
             rule.id, file.file_path
@@ -930,6 +950,7 @@ pub fn analyze_files_with_config(
     mut metrics: Option<&mut EngineMetrics>,
     progress: Option<&Arc<dyn Fn(usize) + Send + Sync + 'static>>,
 ) -> Vec<Finding> {
+    function_taint::reset_function_taints();
     configure_call_graph(files, rules);
     warmup_wasm_rules(rules);
     let rule_index = ApplicableRuleIndex::new(rules);
@@ -1057,6 +1078,7 @@ pub fn analyze_files_streaming<I>(
 where
     I: IntoIterator<Item = FileIR>,
 {
+    function_taint::reset_function_taints();
     let needs_call_graph = rules_require_call_graph(rules);
     if !needs_call_graph {
         dataflow::set_call_graph(dataflow::CallGraph::default());
@@ -1076,16 +1098,19 @@ where
         "Starting streaming analysis with {} rules",
         rules.rules.len()
     );
+    // When a call graph is needed, collect all files first so the graph spans
+    // the entire corpus rather than being rebuilt per-file.
+    let all_files: Vec<FileIR> = files.into_iter().collect();
+    if needs_call_graph {
+        dataflow::set_call_graph(dataflow::CallGraph::build(&all_files));
+    }
     let mut count = 0usize;
-    for f in files.into_iter() {
+    for f in all_files {
         count += 1;
         debug!(
             "Streaming analysis: processing file {}: {}",
             count, f.file_path
         );
-        if needs_call_graph {
-            dataflow::set_call_graph(dataflow::CallGraph::build(std::slice::from_ref(&f)));
-        }
         let mut hash = None;
         if let Some(cache_ref) = cache.as_ref() {
             let computed = cache::hash_file(&f);
@@ -1274,43 +1299,62 @@ fn eval_rule_impl(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
         rule_id: rule.id.clone(),
         file: PathBuf::from(&file.file_path),
     });
-    #[cfg(test)]
-    if rule.id == "slow.rule" {
-        std::thread::sleep(Duration::from_millis(100));
+    if let Some(delay) = SLOW_RULE_DELAYS
+        .get()
+        .and_then(|r| r.lock().unwrap_or_else(|e| e.into_inner()).get(&rule.id).copied())
+    {
+        std::thread::sleep(delay);
     }
     let canonical_path = canonicalize_path(&file.file_path);
     let canonical = canonical_path.to_string_lossy();
     let findings = match &rule.matcher {
         MatcherKind::TextRegex(re, orig) => {
             debug!(rule=%rule.id, file=%file.file_path, kind="TextRegex", fancy=re.is_fancy(), pat=%orig.chars().take(120).collect::<String>());
-            let source = file.source.as_deref().unwrap_or("");
-            let mut findings: Vec<Finding> = source
-                .lines()
-                .enumerate()
-                .filter_map(|(idx, line)| {
-                    if re.is_match(line) {
-                        let line_num = idx + 1;
-                        let id = blake3::hash(
-                            format!("{}:{}:{}:{}", rule.id, canonical, line_num, 1).as_bytes(),
-                        )
-                        .to_hex()
-                        .to_string();
-                        Some(Finding {
-                            id,
-                            rule_id: rule.id.clone(),
-                            rule_file: rule.source_file.clone(),
-                            severity: rule.severity,
-                            file: PathBuf::from(&file.file_path),
-                            line: line_num,
-                            column: 1,
-                            excerpt: line.to_string(),
-                            message: rule.message.clone(),
-                            remediation: rule.remediation.clone(),
-                            fix: rule.fix.clone(),
-                        })
-                    } else {
-                        None
+            let source_owned = if file.source.is_none() && !file.nodes.is_empty() {
+                serde_json::to_string(&file.nodes).ok()
+            } else {
+                None
+            };
+            let source = file.source.as_deref().or(source_owned.as_deref()).unwrap_or("");
+            let mut seen_lines: HashSet<usize> = HashSet::new();
+            let mut findings: Vec<Finding> = re
+                .find_iter(source)
+                .filter_map(|(ms, _me)| {
+                    let mut line_num = 1usize;
+                    let mut line_start = 0usize;
+                    for (idx, ch) in source[..ms].char_indices() {
+                        if ch == '\n' {
+                            line_num += 1;
+                            line_start = idx + 1;
+                        }
                     }
+                    if !seen_lines.insert(line_num) {
+                        return None;
+                    }
+                    let column = source[line_start..ms].chars().count() + 1;
+                    let line_end = source[ms..]
+                        .find('\n')
+                        .map(|i| ms + i)
+                        .unwrap_or(source.len());
+                    let excerpt = source[line_start..line_end].to_string();
+                    let id = blake3::hash(
+                        format!("{}:{}:{}:{}", rule.id, canonical, line_num, column).as_bytes(),
+                    )
+                    .to_hex()
+                    .to_string();
+                    Some(Finding {
+                        id,
+                        rule_id: rule.id.clone(),
+                        rule_file: rule.source_file.clone(),
+                        severity: rule.severity,
+                        file: PathBuf::from(&file.file_path),
+                        line: line_num,
+                        column,
+                        excerpt,
+                        message: rule.message.clone(),
+                        remediation: rule.remediation.clone(),
+                        fix: rule.fix.clone(),
+                    })
                 })
                 .collect();
 
@@ -1675,6 +1719,15 @@ fn eval_rule_impl(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
                         .as_ref()
                         .and_then(|s| s.lines().nth(m.line - 1).map(|l| l.to_string()))
                         .unwrap_or_default();
+                    let message = if m.metavars.is_empty() {
+                        rule.message.clone()
+                    } else {
+                        let mut msg = rule.message.clone();
+                        for (k, v) in &m.metavars {
+                            msg = msg.replace(&format!("${k}"), v);
+                        }
+                        msg
+                    };
                     Finding {
                         id: blake3::hash(
                             format!("{}:{}:{}:{}", rule.id, canonical, m.line, m.column).as_bytes(),
@@ -1688,7 +1741,7 @@ fn eval_rule_impl(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
                         line: m.line,
                         column: m.column,
                         excerpt,
-                        message: rule.message.clone(),
+                        message,
                         remediation: rule.remediation.clone(),
                         fix: rule.fix.clone(),
                     }
@@ -2413,7 +2466,7 @@ fn eval_rule_impl(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
                                         line_start = idx + 1;
                                     }
                                 }
-                                let column = ms - line_start + 1;
+                                let column = source_text[line_start..ms].chars().count() + 1;
                                 let line_end = source_text[me..]
                                     .find('\n')
                                     .map(|i| me + i)
@@ -2578,22 +2631,17 @@ fn eval_rule_impl(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
                         }
                     }
 
-                    if has_path {
+                    if has_path && !reclass_syms.contains(sym) {
                         let id = blake3::hash(
                             format!("{}:{}:{}:{}", rule.id, canonical, line, column).as_bytes(),
                         )
                         .to_hex()
                         .to_string();
-                        let severity = if reclass_syms.contains(sym) {
-                            Severity::Low
-                        } else {
-                            rule.severity
-                        };
                         findings.push(Finding {
                             id,
                             rule_id: rule.id.clone(),
                             rule_file: rule.source_file.clone(),
-                            severity,
+                            severity: rule.severity,
                             file: PathBuf::from(&file.file_path),
                             line: *line,
                             column: *column,
@@ -2746,7 +2794,7 @@ fn parse_rego_output(
                                 findings.push(obj_to_finding(file, rule, canonical, iobj));
                             } else if let Some(s) = inner.as_str() {
                                 let id = blake3::hash(
-                                    format!("{}:{}:0:0", rule.id, canonical).as_bytes(),
+                                    format!("{}:{}:0:0:{}", rule.id, canonical, s).as_bytes(),
                                 )
                                 .to_hex()
                                 .to_string();
@@ -2772,7 +2820,7 @@ fn parse_rego_output(
                     findings.push(obj_to_finding(file, rule, canonical, obj));
                 }
             } else if let Some(s) = v.as_str() {
-                let id = blake3::hash(format!("{}:{}:0:0", rule.id, canonical).as_bytes())
+                let id = blake3::hash(format!("{}:{}:0:0:{}", rule.id, canonical, s).as_bytes())
                     .to_hex()
                     .to_string();
                 findings.push(Finding {
@@ -2795,7 +2843,7 @@ fn parse_rego_output(
         obj.iter()
             .filter_map(|(k, v)| {
                 if v.as_bool().unwrap_or(false) {
-                    let id = blake3::hash(format!("{}:{}:0:0", rule.id, canonical).as_bytes())
+                    let id = blake3::hash(format!("{}:{}:0:0:{}", rule.id, canonical, k).as_bytes())
                         .to_hex()
                         .to_string();
                     Some(Finding {
@@ -2896,6 +2944,7 @@ fn ast_query_findings(
 struct AstMatch {
     line: usize,
     column: usize,
+    metavars: HashMap<String, String>,
 }
 
 fn into_engine_pattern(p: &LoaderAstPattern) -> pattern::AstPattern {
@@ -2955,10 +3004,10 @@ fn match_ast_pattern(file: &FileIR, pattern: &pattern::AstPattern) -> Vec<AstMat
                 );
             }
             if let Some(mv) = capture_metavars(node, &pattern.metavariables) {
-                let _ = mv; // metavariables currently unused
                 matches.push(AstMatch {
                     line: node.meta.line,
                     column: node.meta.column,
+                    metavars: mv,
                 });
             }
         }
