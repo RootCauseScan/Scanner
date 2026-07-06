@@ -67,7 +67,13 @@ fn walk(
                     edges
                         .entry(caller.clone())
                         .or_default()
-                        .insert(callee);
+                        .insert(callee.clone());
+                    // Insert reverse edge so has_flow() BFS can traverse
+                    // from a source to a sibling sink via their common caller.
+                    edges
+                        .entry(callee)
+                        .or_default()
+                        .insert(caller.clone());
                 }
             }
         }

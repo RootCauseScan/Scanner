@@ -896,10 +896,14 @@ pub(crate) fn compile_semgrep_rule(
     if let Some(arr) = sr.pattern_sinks.clone() {
         for snk in arr {
             if let Some(seq) = snk.get("patterns").and_then(|v| v.as_sequence()) {
-                sinks.push(compile_taint_patterns(seq, &mv, focus.as_deref())?);
+                let mut tp = compile_taint_patterns(seq, &mv, focus.as_deref())?;
+                tp.focus = focus.clone();
+                sinks.push(tp);
             } else if snk.get("pattern-either").is_some() || snk.get("pattern").is_some() {
                 let single_item = vec![snk];
-                sinks.push(compile_taint_patterns(&single_item, &mv, focus.as_deref())?);
+                let mut tp = compile_taint_patterns(&single_item, &mv, focus.as_deref())?;
+                tp.focus = focus.clone();
+                sinks.push(tp);
             } else if let Some(raw_re) = snk.get("pattern-regex").and_then(|v| v.as_str()) {
                 let re = compile_regex_with_pcre2_fallback(
                     raw_re,
@@ -910,6 +914,7 @@ pub(crate) fn compile_semgrep_rule(
                 let mut tp = TaintPattern::default();
                 tp.allow.push(re);
                 tp.allow_focus_groups.push(None);
+                tp.focus = focus.clone();
                 sinks.push(tp);
             }
         }

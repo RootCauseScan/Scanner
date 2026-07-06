@@ -27,7 +27,7 @@ fn mk_rule() -> RuleSet {
     };
 
     let reclass = loader::TaintPattern {
-        allow: vec![AnyRegex::from(Regex::new(r"(?m)clean\((\w+)\)").unwrap())],
+        allow: vec![AnyRegex::from(Regex::new(r"(?m)partial_clean\((\w+)\)").unwrap())],
         ..Default::default()
     };
 
@@ -85,5 +85,6 @@ fn reclassifies_flow() {
     let file = parse("../../examples/fixtures/python/taint/reclass.py");
     let rules = mk_rule();
     let findings = analyze_file(&file, &rules);
-    assert_eq!(findings.len(), 0);
+    assert_eq!(findings.len(), 1);
+    assert_eq!(findings[0].severity, Severity::Low);
 }

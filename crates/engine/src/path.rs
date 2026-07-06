@@ -157,6 +157,7 @@ pub fn set_path_regex_cache_capacity(n: usize) {
 /// Override the canonical path cache capacity for testing.
 pub fn set_canonical_cache_capacity(n: usize) {
     CANONICAL_RUNTIME_CAPACITY.store(n, Ordering::Relaxed);
+    reset_canonical_cache();
 }
 
 pub fn path_regex_cache_size() -> usize {

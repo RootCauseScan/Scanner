@@ -138,6 +138,7 @@ pub fn find_taint_path(fir: &FileIR, source: &str, sink: &str) -> Option<Vec<usi
         let is_source_node = if seeded_from_source {
             (node.name == source || node.name == source_key)
                 && matches!(node.kind, ir::DFNodeKind::Def | ir::DFNodeKind::Param)
+                && is_unsanitized(fir, &node.name)
         } else {
             // Fallback: any zero-indegree unsanitized Def
             matches!(node.kind, ir::DFNodeKind::Def)
@@ -2631,7 +2632,12 @@ fn eval_rule_impl(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
                         }
                     }
 
-                    if has_path && !reclass_syms.contains(sym) {
+                    if has_path {
+                        let severity = if reclass_syms.contains(sym) {
+                            Severity::Low
+                        } else {
+                            rule.severity
+                        };
                         let id = blake3::hash(
                             format!("{}:{}:{}:{}", rule.id, canonical, line, column).as_bytes(),
                         )
@@ -2641,7 +2647,7 @@ fn eval_rule_impl(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
                             id,
                             rule_id: rule.id.clone(),
                             rule_file: rule.source_file.clone(),
-                            severity: rule.severity,
+                            severity,
                             file: PathBuf::from(&file.file_path),
                             line: *line,
                             column: *column,
