@@ -1107,26 +1107,74 @@ where
     if needs_call_graph {
         dataflow::set_call_graph(dataflow::CallGraph::build(&all_files));
     }
-    let mut count = 0usize;
+
+    // Pre-pass: drain cache hits sequentially (cache is &mut, not shareable).
+    let mut to_analyze: Vec<(FileIR, Option<String>)> = Vec::with_capacity(all_files.len());
     for f in all_files {
-        count += 1;
-        debug!(
-            "Streaming analysis: processing file {}: {}",
-            count, f.file_path
-        );
-        let mut hash = None;
         if let Some(cache_ref) = cache.as_ref() {
             let computed = cache::hash_file(&f);
-            if let Some(cached_findings) = cache_ref.get(&computed) {
-                findings.extend(cached_findings.clone());
+            if let Some(cached) = cache_ref.get(&computed) {
+                findings.extend(cached.clone());
+                if let Some(cb) = progress {
+                    cb(1);
+                }
                 continue;
             }
-            hash = Some(computed);
+            to_analyze.push((f, Some(computed)));
+        } else {
+            to_analyze.push((f, None));
         }
-        let mut res = analyze_file_with_config_inner(&f, &rule_index, cfg, metrics.as_deref_mut());
-        if cfg.suppress_comment.is_some() {
-            res.retain(|fi| !f.suppressed.contains(&fi.line));
+    }
+    let to_analyze_count = to_analyze.len();
+    let cache_hit_count = findings.len();
+    debug!(
+        "Streaming analysis: {} files to analyze ({} served from cache)",
+        to_analyze_count, cache_hit_count
+    );
+
+    // Analysis phase: parallel when no per-file metrics tracking is needed.
+    // Each file's analysis is independent once the call graph and symbol table
+    // are built, so rayon par_iter gives ~N-CPU speedup with no correctness risk.
+    // The inner rule-timeout pool (RAYON_POOL) is separate from the global pool
+    // used by par_iter, so there is no deadlock.
+    let analyzed: Vec<(Option<String>, Vec<Finding>)> = if metrics.is_none() {
+        to_analyze
+            .par_iter()
+            .map(|(f, hash)| {
+                let mut res = analyze_file_with_config_inner(f, &rule_index, cfg, None);
+                if cfg.suppress_comment.is_some() {
+                    res.retain(|fi| !f.suppressed.contains(&fi.line));
+                }
+                if let Some(cb) = progress {
+                    cb(1);
+                }
+                (hash.clone(), res)
+            })
+            .collect()
+    } else {
+        // Sequential path: preserves per-file and per-rule timing in metrics.
+        let mut results = Vec::with_capacity(to_analyze.len());
+        for (idx, (f, hash)) in to_analyze.into_iter().enumerate() {
+            debug!(
+                "Streaming analysis: processing file {}: {}",
+                idx + 1,
+                f.file_path
+            );
+            let mut res =
+                analyze_file_with_config_inner(&f, &rule_index, cfg, metrics.as_deref_mut());
+            if cfg.suppress_comment.is_some() {
+                res.retain(|fi| !f.suppressed.contains(&fi.line));
+            }
+            if let Some(cb) = progress {
+                cb(1);
+            }
+            results.push((hash, res));
         }
+        results
+    };
+
+    // Post-pass: cache inserts (sequential) and collect all findings.
+    for (hash, res) in analyzed {
         if let Some(rules_hash) = rules_hash.as_deref() {
             if let Some(c) = cache.as_deref_mut() {
                 if let Some(hash_value) = hash.as_ref() {
@@ -1135,11 +1183,11 @@ where
             }
         }
         findings.extend(res);
-        if let Some(cb) = progress {
-            cb(1);
-        }
     }
-    debug!("Streaming analysis completed for {} files", count);
+    debug!(
+        "Streaming analysis completed for {} files",
+        to_analyze_count + cache_hit_count
+    );
     if let Some(baseline) = &cfg.baseline {
         findings.retain(|f| !baseline.contains(&BaselineEntry::from(f)));
     }
