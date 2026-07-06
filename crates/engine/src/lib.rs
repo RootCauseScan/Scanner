@@ -1101,7 +1101,9 @@ where
     );
     // When a call graph is needed, collect all files first so the graph spans
     // the entire corpus rather than being rebuilt per-file.
-    let all_files: Vec<FileIR> = files.into_iter().collect();
+    let mut all_files: Vec<FileIR> = files.into_iter().collect();
+    // Link inter-file Java imports so cross-class taint flows are resolved.
+    parsers::languages::java::link_java_files(&mut all_files);
     if needs_call_graph {
         dataflow::set_call_graph(dataflow::CallGraph::build(&all_files));
     }
