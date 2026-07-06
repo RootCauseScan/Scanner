@@ -314,7 +314,7 @@ fn build_semgrep_regex(pattern: &str, mv: &HashMap<String, String>) -> String {
 
 pub fn semgrep_to_regex(pattern: &str, mv: &HashMap<String, String>) -> String {
     let p = build_semgrep_regex(pattern, mv);
-    format!("(?s).*{p}.*")
+    format!("(?s){p}")
 }
 
 pub fn semgrep_to_regex_exact(pattern: &str, mv: &HashMap<String, String>) -> String {

@@ -86,7 +86,7 @@ pub fn load_rules_with_events(path: &Path) -> anyhow::Result<RuleSet> {
 /// Performs a BFS over the edges of the `DataFlowGraph`, ignoring symbols
 /// marked as sanitized. Returns the sequence of nodes from source
 /// to sink if it exists.
-pub fn find_taint_path(fir: &FileIR, _source: &str, _sink: &str) -> Option<Vec<usize>> {
+pub fn find_taint_path(fir: &FileIR, source: &str, sink: &str) -> Option<Vec<usize>> {
     let dfg = fir.dfg.as_ref()?;
 
     fn is_unsanitized(fir: &FileIR, name: &str) -> bool {
@@ -106,14 +106,39 @@ pub fn find_taint_path(fir: &FileIR, _source: &str, _sink: &str) -> Option<Vec<u
         }
     }
 
+    // Collect the names of variables referenced in the sink text so we can
+    // identify DFG nodes that represent the sink end of the path.
+    let sink_vars: HashSet<String> = extract_sink_variables(sink)
+        .into_iter()
+        .map(|(name, _)| name)
+        .collect();
+
+    // Determine the source node name (strip leading '$' for PHP superglobals).
+    let source_key = source.trim_start_matches('$');
+
     let mut queue: VecDeque<(usize, Vec<usize>)> = VecDeque::new();
     let mut visited = vec![false; dfg.nodes.len()];
 
+    // Seed BFS from every Def/Param node whose name matches the source variable.
+    // Fall back to all zero-indegree unsanitized Def nodes when the source name
+    // is empty or not found in the DFG (preserves existing behaviour for callers
+    // that pass an empty source string).
+    let seeded_from_source = dfg.nodes.iter().enumerate().any(|(_, n)| {
+        (n.name == source || n.name == source_key)
+            && matches!(n.kind, ir::DFNodeKind::Def | ir::DFNodeKind::Param)
+    });
+
     for (idx, node) in dfg.nodes.iter().enumerate() {
-        if matches!(node.kind, ir::DFNodeKind::Def)
-            && indegree[idx] == 0
-            && is_unsanitized(fir, &node.name)
-        {
+        let is_source_node = if seeded_from_source {
+            (node.name == source || node.name == source_key)
+                && matches!(node.kind, ir::DFNodeKind::Def | ir::DFNodeKind::Param)
+        } else {
+            // Fallback: any zero-indegree unsanitized Def
+            matches!(node.kind, ir::DFNodeKind::Def)
+                && indegree[idx] == 0
+                && is_unsanitized(fir, &node.name)
+        };
+        if is_source_node && !visited[idx] {
             queue.push_back((idx, vec![idx]));
             visited[idx] = true;
         }
@@ -121,7 +146,24 @@ pub fn find_taint_path(fir: &FileIR, _source: &str, _sink: &str) -> Option<Vec<u
 
     while let Some((current, path)) = queue.pop_front() {
         let cur_node = &dfg.nodes[current];
-        if matches!(cur_node.kind, ir::DFNodeKind::Use) && is_unsanitized(fir, &cur_node.name) {
+
+        // A path reaches the sink when we find a node whose name appears in the
+        // sink text (or the sink text itself matches).  We accept Def, Use and
+        // Assign nodes as potential sink endpoints.
+        let reaches_sink = !sink_vars.is_empty()
+            && sink_vars.contains(&cur_node.name)
+            && matches!(
+                cur_node.kind,
+                ir::DFNodeKind::Use | ir::DFNodeKind::Def | ir::DFNodeKind::Assign
+            );
+
+        // Also accept the legacy condition (any unsanitized Use) when we have no
+        // sink variable information — this keeps existing PHP behaviour intact.
+        let legacy_sink = sink_vars.is_empty()
+            && matches!(cur_node.kind, ir::DFNodeKind::Use)
+            && is_unsanitized(fir, &cur_node.name);
+
+        if reaches_sink || legacy_sink {
             return Some(path);
         }
 
@@ -537,7 +579,7 @@ fn derive_assignment_lhs(source: &str, pos: usize) -> Option<String> {
     let pos = floor_char_boundary(source, pos);
     let line_start = source[..pos].rfind('\n').map(|idx| idx + 1).unwrap_or(0);
     let prefix = &source[line_start..pos];
-    if prefix.trim().is_empty() {
+    if prefix.is_empty() {
         return None;
     }
     let re = ASSIGN_LHS_RE.get_or_init(|| {
@@ -550,12 +592,25 @@ fn derive_assignment_lhs(source: &str, pos: usize) -> Option<String> {
         .and_then(|caps| caps.name("name").map(|m| m.as_str().to_string()))
 }
 
+// Common Java/C/JS keywords that should not be treated as variable names.
+const LANG_KEYWORDS: &[&str] = &[
+    "abstract", "assert", "boolean", "break", "byte", "case", "catch", "char", "class",
+    "const", "continue", "default", "do", "double", "else", "enum", "extends", "final",
+    "finally", "float", "for", "goto", "if", "implements", "import", "instanceof", "int",
+    "interface", "long", "native", "new", "package", "private", "protected", "public",
+    "return", "short", "static", "strictfp", "super", "switch", "synchronized", "this",
+    "throw", "throws", "transient", "try", "void", "volatile", "while", "true", "false",
+    "null", "String", "Object", "var", "let", "const", "function", "typeof", "instanceof",
+    "in", "of", "async", "await", "yield",
+];
+
 fn extract_sink_variables(text: &str) -> Vec<(String, usize)> {
     let mut vars = Vec::new();
     let mut iter = text.char_indices().peekable();
 
     while let Some((idx, ch)) = iter.next() {
         if ch == '$' {
+            // PHP-style variable: $varName
             let mut var_name = String::new();
             while let Some(&(_, next_ch)) = iter.peek() {
                 if next_ch.is_ascii_alphanumeric() || next_ch == '_' {
@@ -566,6 +621,20 @@ fn extract_sink_variables(text: &str) -> Vec<(String, usize)> {
                 }
             }
             if !var_name.is_empty() {
+                vars.push((var_name, idx));
+            }
+        } else if ch.is_ascii_alphabetic() || ch == '_' {
+            // Java/Python/JS identifier: starts with letter or underscore
+            let mut var_name = ch.to_string();
+            while let Some(&(_, next_ch)) = iter.peek() {
+                if next_ch.is_ascii_alphanumeric() || next_ch == '_' {
+                    var_name.push(next_ch);
+                    iter.next();
+                } else {
+                    break;
+                }
+            }
+            if var_name.len() > 1 && !LANG_KEYWORDS.contains(&var_name.as_str()) {
                 vars.push((var_name, idx));
             }
         }
