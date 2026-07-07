@@ -1,5 +1,5 @@
 use super::*;
-use loader::{AnyRegex, Severity};
+use loader::{AnyRegex, Severity, SubMatcher};
 use regex::Regex;
 use std::fs;
 use tempfile::tempdir;
@@ -19,10 +19,12 @@ fn pattern_inside_and_not_inside() {
         fix: None,
         interfile: false,
         matcher: MatcherKind::TextRegexMulti {
-            allow: vec![(Regex::new(r"foo\(\)").unwrap().into(), "foo()".into())],
-            deny: None,
-            inside: vec![AnyRegex::from(Regex::new(r"bar\([^\)]*\)").unwrap())],
-            not_inside: vec![AnyRegex::from(Regex::new(r"baz\([^\)]*\)").unwrap())],
+            subs: vec![SubMatcher {
+                allow: vec![(Regex::new(r"foo\(\)").unwrap().into(), "foo()".into())],
+                deny: None,
+                inside: vec![AnyRegex::from(Regex::new(r"bar\([^\)]*\)").unwrap())],
+                not_inside: vec![AnyRegex::from(Regex::new(r"baz\([^\)]*\)").unwrap())],
+            }],
         },
         source_file: None,
         sources: vec![],
@@ -51,10 +53,12 @@ fn pattern_not_inside_blocks_match() {
         fix: None,
         interfile: false,
         matcher: MatcherKind::TextRegexMulti {
-            allow: vec![(Regex::new(r"foo\(\)").unwrap().into(), "foo()".into())],
-            deny: None,
-            inside: Vec::new(),
-            not_inside: vec![AnyRegex::from(Regex::new(r"baz\([^\)]*\)").unwrap())],
+            subs: vec![SubMatcher {
+                allow: vec![(Regex::new(r"foo\(\)").unwrap().into(), "foo()".into())],
+                deny: None,
+                inside: Vec::new(),
+                not_inside: vec![AnyRegex::from(Regex::new(r"baz\([^\)]*\)").unwrap())],
+            }],
         },
         source_file: None,
         sources: vec![],
@@ -83,10 +87,12 @@ fn pattern_not_inside_method_signature() {
         fix: None,
         interfile: false,
         matcher: MatcherKind::TextRegexMulti {
-            allow: vec![(Regex::new(r"foo\(\)").unwrap().into(), "foo()".into())],
-            deny: None,
-            inside: Vec::new(),
-            not_inside: vec![AnyRegex::from(Regex::new(r"fn safe\(\)").unwrap())],
+            subs: vec![SubMatcher {
+                allow: vec![(Regex::new(r"foo\(\)").unwrap().into(), "foo()".into())],
+                deny: None,
+                inside: Vec::new(),
+                not_inside: vec![AnyRegex::from(Regex::new(r"fn safe\(\)").unwrap())],
+            }],
         },
         source_file: None,
         sources: vec![],
@@ -115,10 +121,12 @@ fn pattern_not_inside_wrong_signature_matches_all() {
         fix: None,
         interfile: false,
         matcher: MatcherKind::TextRegexMulti {
-            allow: vec![(Regex::new(r"foo\(\)").unwrap().into(), "foo()".into())],
-            deny: None,
-            inside: Vec::new(),
-            not_inside: vec![AnyRegex::from(Regex::new(r"fn missing\(\)").unwrap())],
+            subs: vec![SubMatcher {
+                allow: vec![(Regex::new(r"foo\(\)").unwrap().into(), "foo()".into())],
+                deny: None,
+                inside: Vec::new(),
+                not_inside: vec![AnyRegex::from(Regex::new(r"fn missing\(\)").unwrap())],
+            }],
         },
         source_file: None,
         sources: vec![],
@@ -149,15 +157,17 @@ fn pattern_not_inside_method_signature_with_signwith() {
         fix: None,
         interfile: false,
         matcher: MatcherKind::TextRegexMulti {
-            allow: vec![
-                (
-                    Regex::new(r"Jwts\\.builder\\(\\)").unwrap().into(),
-                    "Jwts.builder()".into(),
-                ),
-            ],
-            deny: None,
-            inside: Vec::new(),
-            not_inside: vec![AnyRegex::from(Regex::new(r"void good\(\)[^{]*\{[\s\S]*signWith\(").unwrap())],
+            subs: vec![SubMatcher {
+                allow: vec![
+                    (
+                        Regex::new(r"Jwts\\.builder\\(\\)").unwrap().into(),
+                        "Jwts.builder()".into(),
+                    ),
+                ],
+                deny: None,
+                inside: Vec::new(),
+                not_inside: vec![AnyRegex::from(Regex::new(r"void good\(\)[^{]*\{[\s\S]*signWith\(").unwrap())],
+            }],
         },
         source_file: None,
         sources: vec![],

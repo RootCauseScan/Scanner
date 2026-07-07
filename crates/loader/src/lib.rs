@@ -16,7 +16,7 @@ mod regex_types;
 pub mod schema;
 mod walk;
 
-pub use matchers::{MatcherKind, Query, TaintPattern};
+pub use matchers::{MatcherKind, Query, SubMatcher, TaintPattern};
 pub use regex_types::{regex_ext, AnyCaptures, AnyMatch, AnyRegex};
 pub use schema::compiled::{AstQueryRule, CompiledRule, Example, RuleOptions, RuleSet, Severity};
 pub use schema::json::{JsonQuery, JsonRule};

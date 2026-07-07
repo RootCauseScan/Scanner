@@ -7,7 +7,7 @@ use loader::{
     semgrep_to_regex, semgrep_to_regex_exact, AnyRegex, AstPattern as LoaderAstPattern,
     MetaVar as LoaderMetaVar,
 };
-pub use loader::{CompiledRule, MatcherKind, RuleSet, Severity, TaintPattern};
+pub use loader::{CompiledRule, MatcherKind, RuleSet, Severity, SubMatcher, TaintPattern};
 use parsers::ParserMetrics;
 use rayon::prelude::*;
 use rayon::ThreadPoolBuilder;
