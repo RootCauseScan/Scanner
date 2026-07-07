@@ -36,6 +36,7 @@ pub fn build_dfg(fir: &mut FileIR) -> Result<()> {
     match fir.file_type.as_str() {
         "python" => languages::python::parse_python(&src, fir),
         "rust" => languages::rust::parse_rust(&src, fir),
+        "java" => languages::java::parse_java(&src, fir),
         _ => Ok(()),
     }
 }

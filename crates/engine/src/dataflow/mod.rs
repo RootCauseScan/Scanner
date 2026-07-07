@@ -32,8 +32,16 @@ impl CallGraph {
     }
 }
 
+fn is_function_kind(kind: &str) -> bool {
+    kind.contains("Function") || kind == "MethodDeclaration" || kind == "ConstructorDeclaration"
+}
+
+fn is_call_kind(kind: &str) -> bool {
+    kind == "CallExpression" || kind == "Call" || kind == "MethodInvocation" || kind == "ObjectCreationExpression"
+}
+
 fn collect_names(node: &AstNode, map: &mut HashMap<usize, String>) {
-    if node.kind.contains("Function") {
+    if is_function_kind(&node.kind) {
         if let Some(name) = node.value.as_str() {
             map.insert(node.id, name.to_string());
         }
@@ -51,10 +59,10 @@ fn walk(
     edges: &mut HashMap<String, HashSet<String>>,
 ) {
     let mut cur = current;
-    if node.kind.contains("Function") {
+    if is_function_kind(&node.kind) {
         cur = Some(node.id);
     }
-    if node.kind == "CallExpression" || node.kind == "Call" {
+    if is_call_kind(&node.kind) {
         if let Some(caller_id) = cur {
             let line = node.meta.line;
             let code = src.lines().nth(line - 1).unwrap_or("").trim();

@@ -438,6 +438,197 @@ fn build_dfg(
                 }
             }
         }
+        "constructor_declaration" => {
+            if let Some(name_node) = node.child_by_field_name("name") {
+                if let Ok(name) = name_node.utf8_text(src.as_bytes()) {
+                    let (id, fn_line) = stable_node_id2(fir, Some(name_node), &format!("constructor:{name}"));
+                    push_node(
+                        fir,
+                        DFNode {
+                            id,
+                            name: name.to_string(),
+                            kind: DFNodeKind::Def,
+                            sanitized: false,
+                            branch: branch_stack.last().copied(),
+                            line: fn_line,
+                            ..Default::default()
+                        },
+                    );
+                    fn_ids.insert(name.to_string(), id);
+                    if let Some(params) = node.child_by_field_name("parameters") {
+                        let mut pc = params.walk();
+                        for p in params.children(&mut pc) {
+                            if p.kind() == "formal_parameter" {
+                                if let Some(pn) = p.child_by_field_name("name") {
+                                    if let Ok(pname) = pn.utf8_text(src.as_bytes()) {
+                                        let (pid, param_line) = stable_node_id2(
+                                            fir,
+                                            Some(pn),
+                                            &format!("param:{name}:{pname}"),
+                                        );
+                                        push_node(
+                                            fir,
+                                            DFNode {
+                                                id: pid,
+                                                name: pname.to_string(),
+                                                kind: DFNodeKind::Param,
+                                                sanitized: false,
+                                                branch: branch_stack.last().copied(),
+                                                line: param_line,
+                                                ..Default::default()
+                                            },
+                                        );
+                                        fn_params.entry(id).or_default().push(pid);
+                                        fir.symbols.insert(
+                                            pname.to_string(),
+                                            Symbol {
+                                                name: pname.to_string(),
+                                                sanitized: false,
+                                                def: Some(pid),
+                                                alias_of: None,
+                                            },
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    let mut cursor = node.walk();
+                    for child in node.children(&mut cursor) {
+                        build_dfg(
+                            child,
+                            src,
+                            fir,
+                            imports,
+                            wildcards,
+                            Some(id),
+                            fn_ids,
+                            fn_params,
+                            fn_returns,
+                            call_args,
+                            branch_stack,
+                            branch_counter,
+                            merge_counter,
+                        );
+                    }
+                    return;
+                }
+            }
+        }
+        "field_declaration" => {
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                if child.kind() == "variable_declarator" {
+                    // Only track initialized field declarations; uninitialized fields carry no
+                    // taint and would conflict with the assignment_expression Def created when
+                    // the field is later written (e.g. `this.f = param`).
+                    if let Some(val) = child.child_by_field_name("value") {
+                        if let Some(name_node) = child.child_by_field_name("name") {
+                            if let Ok(var) = name_node.utf8_text(src.as_bytes()) {
+                                let mut ids: Vec<String> = Vec::new();
+                                let mut sanitized = false;
+                                if val.kind() != "lambda_expression"
+                                    && val.kind() != "method_reference"
+                                {
+                                    let mut call_sanitizer = false;
+                                    if let Some(call) = extract_call_path(val, src) {
+                                        if resolve_import(&call, imports, wildcards)
+                                            .into_iter()
+                                            .chain(std::iter::once(call.clone()))
+                                            .any(|f| {
+                                                catalog_module::is_sanitizer("java", &f)
+                                                    || matches!(
+                                                        fir.symbol_types.get(&f),
+                                                        Some(SymbolKind::Sanitizer)
+                                                    )
+                                            })
+                                        {
+                                            call_sanitizer = true;
+                                        }
+                                    }
+                                    if !call_sanitizer {
+                                        gather_ids(val, src, &mut ids);
+                                    }
+                                    sanitized = call_sanitizer;
+                                }
+                                let field_key = format!("this.{var}");
+                                let (id, field_line) = stable_node_id2(fir, Some(name_node), &format!("field:{var}"));
+                                push_node(
+                                    fir,
+                                    DFNode {
+                                        id,
+                                        name: field_key.clone(),
+                                        kind: DFNodeKind::Def,
+                                        sanitized,
+                                        branch: branch_stack.last().copied(),
+                                        line: field_line,
+                                        ..Default::default()
+                                    },
+                                );
+                                let san = sanitized
+                                    || ids.iter().any(|src_var| {
+                                        let canonical = resolve_alias(src_var, &fir.symbols);
+                                        find_symbol(&canonical, &fir.symbols)
+                                            .map(|s| s.sanitized)
+                                            .unwrap_or(false)
+                                    });
+                                fir.symbols.insert(
+                                    field_key.clone(),
+                                    Symbol {
+                                        name: field_key,
+                                        sanitized: san,
+                                        def: Some(id),
+                                        alias_of: None,
+                                    },
+                                );
+                                for src_var in &ids {
+                                    let canonical = resolve_alias(src_var, &fir.symbols);
+                                    if let Some(def_id) =
+                                        find_symbol(&canonical, &fir.symbols).and_then(|s| s.def)
+                                    {
+                                        push_edge(fir, (def_id, id));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            return;
+        }
+        "catch_formal_parameter" => {
+            if let Some(name_node) = node.child_by_field_name("name") {
+                if let Ok(pname) = name_node.utf8_text(src.as_bytes()) {
+                    let (pid, param_line) = stable_node_id2(
+                        fir,
+                        Some(name_node),
+                        &format!("catch_param:{pname}"),
+                    );
+                    push_node(
+                        fir,
+                        DFNode {
+                            id: pid,
+                            name: pname.to_string(),
+                            kind: DFNodeKind::Param,
+                            sanitized: false,
+                            branch: branch_stack.last().copied(),
+                            line: param_line,
+                            ..Default::default()
+                        },
+                    );
+                    fir.symbols.insert(
+                        pname.to_string(),
+                        Symbol {
+                            name: pname.to_string(),
+                            sanitized: false,
+                            def: Some(pid),
+                            alias_of: None,
+                        },
+                    );
+                }
+            }
+            return;
+        }
         "local_variable_declaration" => {
             let mut cursor = node.walk();
             for child in node.children(&mut cursor) {
@@ -1339,6 +1530,83 @@ fn build_dfg(
                 );
                 branch_states.push(fir.symbols.clone());
                 branch_stack.pop();
+            }
+            branch_states.push(before.clone());
+            merge_states(fir, branch_states, merge_counter);
+            return;
+        }
+        "do_statement" => {
+            // do { body } while (cond): body always executes once, then condition checked.
+            // Model conservatively: run body as a branch and merge with pre-loop state.
+            let (nid, do_line) = stable_node_id2(fir, Some(node), "branch:do");
+            push_node(
+                fir,
+                DFNode {
+                    id: nid,
+                    name: "do".to_string(),
+                    kind: DFNodeKind::Branch,
+                    sanitized: false,
+                    branch: branch_stack.last().copied(),
+                    line: do_line,
+                    ..Default::default()
+                },
+            );
+            let before = fir.symbols.clone();
+            let mut branch_states: Vec<HashMap<String, Symbol>> = Vec::new();
+            if let Some(body) = node.child_by_field_name("body") {
+                let id = *branch_counter;
+                *branch_counter += 1;
+                fir.symbols = before.clone();
+                branch_stack.push(id);
+                build_dfg(
+                    body,
+                    src,
+                    fir,
+                    imports,
+                    wildcards,
+                    current_fn,
+                    fn_ids,
+                    fn_params,
+                    fn_returns,
+                    call_args,
+                    branch_stack,
+                    branch_counter,
+                    merge_counter,
+                );
+                branch_states.push(fir.symbols.clone());
+                branch_stack.pop();
+            }
+            if let Some(cond) = node.child_by_field_name("condition") {
+                let mut ids = Vec::new();
+                gather_ids(cond, src, &mut ids);
+                for name in ids {
+                    let canonical = resolve_alias(&name, &fir.symbols);
+                    let sanitized = find_symbol(&canonical, &fir.symbols)
+                        .map(|s| s.sanitized)
+                        .unwrap_or(false);
+                    let (uid, do_cond_line) = stable_node_id2(fir, Some(cond), &format!("do_cond_use:{name}"));
+                    push_node(
+                        fir,
+                        DFNode {
+                            id: uid,
+                            name: name.clone(),
+                            kind: DFNodeKind::Use,
+                            sanitized,
+                            branch: branch_stack.last().copied(),
+                            line: do_cond_line,
+                            ..Default::default()
+                        },
+                    );
+                    fir.symbols.entry(name.clone()).or_insert_with(|| Symbol {
+                        name: name.clone(),
+                        sanitized: false,
+                        def: None,
+                        alias_of: None,
+                    });
+                    if let Some(def_id) = find_symbol(&canonical, &fir.symbols).and_then(|s| s.def) {
+                        push_edge(fir, (def_id, uid));
+                    }
+                }
             }
             branch_states.push(before.clone());
             merge_states(fir, branch_states, merge_counter);

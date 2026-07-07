@@ -57,8 +57,35 @@ pub fn has_unsanitized_route(file: &FileIR) -> bool {
     match file.file_type.as_str() {
         "typescript" | "javascript" => ast.nodes.iter().any(|n| has_unsanitized_js_like(n, src)),
         "python" => ast.nodes.iter().any(|n| has_unsanitized_python(n, src)),
+        "java" => ast.nodes.iter().any(|n| has_unsanitized_java(n, src)),
         _ => false,
     }
+}
+
+fn has_unsanitized_java(node: &AstNode, src: &str) -> bool {
+    // Detect response.getWriter().print/println(tainted) where tainted comes from request
+    if node.kind == "MethodInvocation" {
+        if let Some(val) = node.value.as_str() {
+            let is_response_write = val.ends_with(".print")
+                || val.ends_with(".println")
+                || val.ends_with("getWriter().print")
+                || val.ends_with("getWriter().println")
+                || val.ends_with(".write");
+            if is_response_write {
+                let has_request_input = subtree_has_call_prefix(node, "getParameter")
+                    || subtree_has_call_prefix(node, "request.get")
+                    || subtree_has_call_prefix(node, "HttpServletRequest");
+                let sanitized = subtree_has_call(node, "sanitize")
+                    || subtree_has_call_prefix(node, "Encode.")
+                    || subtree_has_call_prefix(node, "escapeHtml")
+                    || subtree_has_call_prefix(node, "encodeFor");
+                if has_request_input && !sanitized {
+                    return true;
+                }
+            }
+        }
+    }
+    node.children.iter().any(|c| has_unsanitized_java(c, src))
 }
 
 fn has_unsanitized_js_like(node: &AstNode, src: &str) -> bool {
