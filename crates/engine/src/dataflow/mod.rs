@@ -6,7 +6,7 @@ use std::sync::{OnceLock, RwLock, RwLockReadGuard};
 /// Graph of function calls.
 #[derive(Debug, Clone, Default)]
 pub struct CallGraph {
-    pub edges: HashMap<String, HashSet<String>>, // undirected for simple reachability
+    pub edges: HashMap<String, HashSet<String>>, // directed: caller → callees
 }
 
 impl CallGraph {
@@ -63,14 +63,14 @@ fn walk(
             } else {
                 code
             };
-            if let Some((callee, _)) = parse_call(call_part) {
-                if let Some(caller) = id_to_name.get(&caller_id) {
-                    edges
-                        .entry(caller.clone())
-                        .or_default()
-                        .insert(callee.clone());
-                    edges.entry(callee).or_default().insert(caller.clone());
-                }
+            // Prefer AstNode.value for callee name; fall back to text parsing
+            let callee_opt = node.value.as_str().map(|s| s.to_string()).or_else(|| {
+                parse_call(call_part).map(|(name, _)| name)
+            });
+            if let (Some(caller), Some(callee)) =
+                (id_to_name.get(&caller_id), callee_opt)
+            {
+                edges.entry(caller.clone()).or_default().insert(callee);
             }
         }
     }
