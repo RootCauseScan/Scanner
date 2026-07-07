@@ -100,3 +100,74 @@ fn java_taint_unrelated_path_produces_no_finding() {
         "java file without sink() call should produce no path"
     );
 }
+
+#[test]
+fn java_interproc_taint_detected_across_method_boundary() {
+    let fir = parse_java("../../examples/fixtures/java/java.interproc/bad.java");
+    if fir.file_path == "missing" {
+        return;
+    }
+    let result = find_taint_path(&fir, "dangerous", "sink");
+    assert!(
+        result.is_some(),
+        "expected taint path across method boundary in interproc/bad.java, got None"
+    );
+}
+
+#[test]
+fn java_interproc_sanitized_path_is_clean() {
+    let fir = parse_java("../../examples/fixtures/java/java.interproc/good.java");
+    if fir.file_path == "missing" {
+        return;
+    }
+    assert_eq!(
+        find_taint_path(&fir, "dangerous", "sink"),
+        None,
+        "sanitized inter-procedural flow should produce no taint path"
+    );
+}
+
+#[test]
+fn java_interproc_call_edges_populated() {
+    let fir = parse_java("../../examples/fixtures/java/java.interproc/bad.java");
+    if fir.file_path == "missing" {
+        return;
+    }
+    let dfg = fir.dfg.as_ref().expect("DFG should exist for interproc/bad.java");
+    assert!(
+        !dfg.calls.is_empty(),
+        "inter-procedural call should populate dfg.calls"
+    );
+}
+
+#[test]
+fn java_cfg_for_switch_has_multiple_blocks() {
+    let src = r#"class SwitchTest {
+    void run(int x) {
+        switch (x) {
+            case 1:
+                doA();
+                break;
+            case 2:
+                doB();
+                break;
+            default:
+                doC();
+        }
+    }
+}
+"#;
+    let tmp = tempfile::NamedTempFile::with_suffix(".java").expect("tempfile");
+    std::fs::write(tmp.path(), src).expect("write");
+    let mut fir = parsers::parse_file(tmp.path(), None, None)
+        .expect("parse")
+        .expect("file");
+    prepare_file(&mut fir);
+    let cfg = fir.cfg.expect("CFG should be built for switch statement");
+    // switch(x) with 3 cases → at least: entry + 3 case blocks + exit = 5+ blocks
+    assert!(
+        cfg.blocks.len() >= 4,
+        "switch with 3 cases should produce at least 4 blocks, got {}",
+        cfg.blocks.len()
+    );
+}

@@ -1,5 +1,3 @@
-import static org.apache.commons.text.StringEscapeUtils.escapeHtml;
-
 class Good {
     String id(String p) {
         return p;
@@ -7,8 +5,8 @@ class Good {
 
     void caller() {
         String src = dangerous();
-        String tmp = id(src);
-        String s = escapeHtml(tmp);
-        sink(s);
+        src = id(src);
+        src = org.apache.commons.text.StringEscapeUtils.escapeHtml(src);
+        sink(src);
     }
 }

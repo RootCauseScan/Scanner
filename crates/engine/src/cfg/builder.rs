@@ -191,7 +191,9 @@ fn process_stmt(node: &AstNode, ctx: &mut Ctx, current: usize, file_type: &str) 
             process_for_in(node, ctx, current, file_type)
         }
         "TryStatement" | "Try" => process_try(node, ctx, current, file_type),
-        "SwitchStatement" | "Switch" => process_switch(node, ctx, current, file_type),
+        "SwitchStatement" | "Switch" | "SwitchExpression" => {
+            process_switch(node, ctx, current, file_type)
+        }
 
         // ── early exits ───────────────────────────────────────────────────
         "ReturnStatement" | "Return" | "ThrowStatement" | "Throw" => {
