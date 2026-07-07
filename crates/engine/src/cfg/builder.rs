@@ -2,10 +2,10 @@ use ir::{AstNode, BasicBlock, CfgEdge, CfgEdgeKind, FileCFG, FileIR};
 use std::collections::HashMap;
 
 /// Builds a real basic-block CFG for a file by walking its AST.
-/// Supports JS, TS, and Python; returns None when no AST is available.
+/// Supports JS, TS, Python, and Java; returns None when no AST is available.
 pub fn build_file_cfg(file: &FileIR) -> Option<FileCFG> {
     match file.file_type.as_str() {
-        "javascript" | "typescript" | "python" => {}
+        "javascript" | "typescript" | "python" | "java" => {}
         _ => return None,
     }
     let ast = file.ast.as_ref()?;
@@ -107,6 +107,10 @@ impl Ctx {
 fn is_function_node(node: &AstNode, file_type: &str) -> bool {
     match file_type {
         "python" => node.kind == "FunctionDefinition",
+        "java" => matches!(
+            node.kind.as_str(),
+            "MethodDeclaration" | "ConstructorDeclaration"
+        ),
         _ => matches!(
             node.kind.as_str(),
             "FunctionDeclaration"
@@ -169,13 +173,21 @@ fn process_stmt_list(stmts: &[AstNode], ctx: &mut Ctx, mut current: usize, file_
 fn process_stmt(node: &AstNode, ctx: &mut Ctx, current: usize, file_type: &str) -> usize {
     let line = node.meta.line;
     match node.kind.as_str() {
+        // ── transparent block wrappers — descend into children ─────────────
+        // JS/TS StatementBlock, Java Block: don't create a new CFG block,
+        // just process the children sequentially in the current block.
+        "StatementBlock" | "Block" => {
+            process_stmt_list(&node.children, ctx, current, file_type)
+        }
+
         // ── branching ──────────────────────────────────────────────────────
         "IfStatement" | "If" => process_if(node, ctx, current, file_type),
         "WhileStatement" | "While" | "DoStatement" | "Do" => {
             process_while(node, ctx, current, file_type)
         }
         "ForStatement" | "For" => process_for(node, ctx, current, file_type),
-        "ForInStatement" | "ForOfStatement" | "ForIn" | "ForOf" => {
+        // Java enhanced-for + JS for-in/of
+        "ForInStatement" | "ForOfStatement" | "ForIn" | "ForOf" | "EnhancedForStatement" => {
             process_for_in(node, ctx, current, file_type)
         }
         "TryStatement" | "Try" => process_try(node, ctx, current, file_type),
@@ -215,6 +227,7 @@ fn process_stmt(node: &AstNode, ctx: &mut Ctx, current: usize, file_type: &str) 
 fn is_function_node_kind(kind: &str, file_type: &str) -> bool {
     match file_type {
         "python" => kind == "FunctionDefinition",
+        "java" => matches!(kind, "MethodDeclaration" | "ConstructorDeclaration" | "LambdaExpression"),
         _ => matches!(
             kind,
             "FunctionDeclaration"
@@ -222,6 +235,7 @@ fn is_function_node_kind(kind: &str, file_type: &str) -> bool {
                 | "ArrowFunction"
                 | "MethodDefinition"
                 | "Function"
+                | "LambdaExpression"
         ),
     }
 }
@@ -391,10 +405,22 @@ fn process_switch(node: &AstNode, ctx: &mut Ctx, current: usize, file_type: &str
     let after_block = ctx.new_block("switch_after");
     ctx.loop_stack.push((current, after_block));
 
-    let cases: Vec<&AstNode> = node
-        .children
+    // Java wraps cases in SwitchBlock; unwrap one level if present.
+    let children_ref: &[AstNode];
+    let switch_block_children: Vec<AstNode>;
+    if let Some(block) = node.children.iter().find(|c| c.kind == "SwitchBlock") {
+        switch_block_children = block.children.clone();
+        children_ref = &switch_block_children;
+    } else {
+        children_ref = &node.children;
+    }
+    let cases: Vec<&AstNode> = children_ref
         .iter()
-        .filter(|c| matches!(c.kind.as_str(), "SwitchCase" | "SwitchDefault" | "Case" | "Default"))
+        .filter(|c| matches!(
+            c.kind.as_str(),
+            "SwitchCase" | "SwitchDefault" | "Case" | "Default"
+            | "SwitchBlockStatementGroup" | "SwitchRule"
+        ))
         .collect();
 
     let mut prev_exit = current;
@@ -528,5 +554,172 @@ mod tests {
     fn functions_map_populated() {
         let cfg = build(func_node("myFunc", vec![]));
         assert!(cfg.functions.contains_key("myFunc"));
+    }
+
+    // ── Java-specific tests ────────────────────────────────────────────────
+
+    fn meta_java(line: usize) -> Meta {
+        Meta { file: "Test.java".into(), line, column: 1 }
+    }
+
+    fn java_method(name: &str, children: Vec<AstNode>) -> AstNode {
+        AstNode {
+            id: 1,
+            kind: "MethodDeclaration".to_string(),
+            value: serde_json::Value::String(name.to_string()),
+            meta: meta_java(1),
+            children,
+            parent: None,
+        }
+    }
+
+    fn build_java(method: AstNode) -> FileCFG {
+        // Wrap in ClassDeclaration → ClassBody to match real Java AST structure
+        let class_body = AstNode {
+            id: 1000,
+            kind: "ClassBody".to_string(),
+            value: serde_json::Value::Null,
+            meta: meta_java(1),
+            children: vec![method],
+            parent: None,
+        };
+        let class = AstNode {
+            id: 999,
+            kind: "ClassDeclaration".to_string(),
+            value: serde_json::Value::Null,
+            meta: meta_java(1),
+            children: vec![class_body],
+            parent: None,
+        };
+        let mut fir = FileIR::new("Test.java".into(), "java".into());
+        fir.ast = Some(FileAst {
+            file_path: "Test.java".into(),
+            file_type: "java".into(),
+            nodes: vec![class],
+            index: vec![],
+        });
+        build_file_cfg(&fir).unwrap()
+    }
+
+    fn java_leaf(kind: &str, line: usize) -> AstNode {
+        AstNode {
+            id: line * 100,
+            kind: kind.to_string(),
+            value: serde_json::Value::Null,
+            meta: meta_java(line),
+            children: vec![],
+            parent: None,
+        }
+    }
+
+    #[test]
+    fn java_method_produces_entry_and_exit() {
+        let cfg = build_java(java_method("run", vec![]));
+        assert_eq!(cfg.blocks.len(), 2, "entry + exit");
+        assert!(cfg.functions.contains_key("run"));
+    }
+
+    #[test]
+    fn java_block_wrapper_is_transparent() {
+        // MethodDeclaration → Block → statements
+        // The Block should be transparent: no extra CFG block created
+        let block = AstNode {
+            id: 50,
+            kind: "Block".to_string(),
+            value: serde_json::Value::Null,
+            meta: meta_java(2),
+            children: vec![java_leaf("LocalVariableDeclaration", 3)],
+            parent: None,
+        };
+        let cfg = build_java(java_method("run", vec![block]));
+        // entry + exit only — Block doesn't add an extra block
+        assert_eq!(cfg.blocks.len(), 2);
+    }
+
+    #[test]
+    fn java_if_in_block_creates_correct_blocks() {
+        let if_node = AstNode {
+            id: 10,
+            kind: "IfStatement".to_string(),
+            value: serde_json::Value::Null,
+            meta: meta_java(3),
+            children: vec![java_leaf("ExpressionStatement", 4)],
+            parent: None,
+        };
+        let block = AstNode {
+            id: 50,
+            kind: "Block".to_string(),
+            value: serde_json::Value::Null,
+            meta: meta_java(2),
+            children: vec![if_node],
+            parent: None,
+        };
+        let cfg = build_java(java_method("run", vec![block]));
+        // entry, if_true, if_false, if_merge, exit
+        assert_eq!(cfg.blocks.len(), 5);
+        assert!(cfg.edges.iter().any(|e| e.kind == CfgEdgeKind::ConditionalTrue));
+        assert!(cfg.edges.iter().any(|e| e.kind == CfgEdgeKind::ConditionalFalse));
+    }
+
+    #[test]
+    fn java_enhanced_for_has_loop_back() {
+        let for_node = AstNode {
+            id: 20,
+            kind: "EnhancedForStatement".to_string(),
+            value: serde_json::Value::Null,
+            meta: meta_java(3),
+            children: vec![java_leaf("ExpressionStatement", 4)],
+            parent: None,
+        };
+        let cfg = build_java(java_method("run", vec![for_node]));
+        assert!(
+            cfg.edges.iter().any(|e| e.kind == CfgEdgeKind::LoopBack),
+            "enhanced-for should produce LoopBack edge"
+        );
+    }
+
+    #[test]
+    fn java_lambda_inside_method_is_not_descended() {
+        // LambdaExpression inside the method body should be treated as
+        // an opaque nested function — the builder should NOT descend into it.
+        let lambda = AstNode {
+            id: 30,
+            kind: "LambdaExpression".to_string(),
+            value: serde_json::Value::Null,
+            meta: meta_java(3),
+            // Contains a ReturnStatement that would create extra blocks if descended
+            children: vec![java_leaf("ReturnStatement", 4)],
+            parent: None,
+        };
+        let cfg = build_java(java_method("run", vec![lambda]));
+        // Only entry + exit — lambda body not processed
+        assert_eq!(cfg.blocks.len(), 2);
+    }
+
+    #[test]
+    fn java_try_catch_has_exception_edge() {
+        let try_node = AstNode {
+            id: 40,
+            kind: "TryStatement".to_string(),
+            value: serde_json::Value::Null,
+            meta: meta_java(3),
+            children: vec![
+                java_leaf("ExpressionStatement", 4),
+                AstNode {
+                    id: 41,
+                    kind: "CatchClause".to_string(),
+                    value: serde_json::Value::Null,
+                    meta: meta_java(5),
+                    children: vec![java_leaf("ExpressionStatement", 6)],
+                    parent: None,
+                },
+            ],
+            parent: None,
+        };
+        let cfg = build_java(java_method("run", vec![try_node]));
+        assert!(
+            cfg.edges.iter().any(|e| e.kind == CfgEdgeKind::Exception),
+            "try-catch should produce Exception edge"
+        );
     }
 }

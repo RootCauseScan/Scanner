@@ -202,6 +202,16 @@ fn stable_node_id(fir: &FileIR, node: Option<Node>, key: &str) -> usize {
     }
 }
 
+fn stable_node_id2(fir: &FileIR, node: Option<Node>, key: &str) -> (usize, usize) {
+    if let Some(n) = node {
+        let pos = n.start_position();
+        let line = pos.row + 1;
+        (stable_id(&fir.file_path, line, pos.column + 1, key), line)
+    } else {
+        (stable_id(&fir.file_path, 0, 0, key), 0)
+    }
+}
+
 fn find_node_mut(dfg: &mut DataFlowGraph, id: usize) -> Option<&mut DFNode> {
     dfg.nodes.iter_mut().find(|n| n.id == id)
 }
@@ -354,7 +364,7 @@ fn build_dfg(
         "method_declaration" => {
             if let Some(name_node) = node.child_by_field_name("name") {
                 if let Ok(name) = name_node.utf8_text(src.as_bytes()) {
-                    let id = stable_node_id(fir, Some(name_node), &format!("function:{name}"));
+                    let (id, fn_line) = stable_node_id2(fir, Some(name_node), &format!("function:{name}"));
                     push_node(
                         fir,
                         DFNode {
@@ -363,6 +373,7 @@ fn build_dfg(
                             kind: DFNodeKind::Def,
                             sanitized: false,
                             branch: branch_stack.last().copied(),
+                            line: fn_line,
                         ..Default::default()
                         },
                     );
@@ -373,7 +384,7 @@ fn build_dfg(
                             if p.kind() == "formal_parameter" {
                                 if let Some(pn) = p.child_by_field_name("name") {
                                     if let Ok(pname) = pn.utf8_text(src.as_bytes()) {
-                                        let pid = stable_node_id(
+                                        let (pid, param_line) = stable_node_id2(
                                             fir,
                                             Some(pn),
                                             &format!("param:{name}:{pname}"),
@@ -386,6 +397,7 @@ fn build_dfg(
                                                 kind: DFNodeKind::Param,
                                                 sanitized: false,
                                                 branch: branch_stack.last().copied(),
+                                                line: param_line,
                         ..Default::default()
                                             },
                                         );
@@ -465,7 +477,7 @@ fn build_dfg(
                                     }
                                 }
                             }
-                            let id = stable_node_id(fir, Some(name_node), &format!("local:{var}"));
+                            let (id, local_line) = stable_node_id2(fir, Some(name_node), &format!("local:{var}"));
                             fir.dfg
                                 .get_or_insert_with(DataFlowGraph::default)
                                 .nodes
@@ -475,6 +487,7 @@ fn build_dfg(
                                     kind: DFNodeKind::Def,
                                     sanitized,
                                     branch: branch_stack.last().copied(),
+                                    line: local_line,
                         ..Default::default()
                                 });
                             let mut sym = Symbol {
@@ -579,7 +592,7 @@ fn build_dfg(
                         .and_then(|c| find_symbol(c, &fir.symbols))
                         .map(|s| s.sanitized)
                         .unwrap_or(false);
-                    let id = stable_node_id(fir, Some(left), &format!("local:{var}"));
+                    let (id, assign_line) = stable_node_id2(fir, Some(left), &format!("local:{var}"));
                     fir.dfg
                         .get_or_insert_with(DataFlowGraph::default)
                         .nodes
@@ -589,6 +602,7 @@ fn build_dfg(
                             kind: DFNodeKind::Def,
                             sanitized: sanitized || alias_sanitized,
                             branch: branch_stack.last().copied(),
+                            line: assign_line,
                         ..Default::default()
                         });
                     let canonical_names: Vec<String> = ids
@@ -675,7 +689,7 @@ fn build_dfg(
             }
         }
         "lambda_expression" => {
-            let func_id = stable_node_id(fir, Some(node), "lambda");
+            let (func_id, lambda_line) = stable_node_id2(fir, Some(node), "lambda");
             let lname = format!("lambda_{func_id}");
             push_node(
                 fir,
@@ -685,6 +699,7 @@ fn build_dfg(
                     kind: DFNodeKind::Def,
                     sanitized: false,
                     branch: branch_stack.last().copied(),
+                    line: lambda_line,
                         ..Default::default()
                 },
             );
@@ -741,7 +756,7 @@ fn build_dfg(
                         let sanitized = find_symbol(&canonical, &fir.symbols)
                             .map(|s| s.sanitized)
                             .unwrap_or(false);
-                        let rid = stable_node_id(
+                        let (rid, ret_line) = stable_node_id2(
                             fir,
                             Some(body),
                             &format!("lambda_ret:{func_id}:{name}"),
@@ -755,6 +770,7 @@ fn build_dfg(
                                 kind: DFNodeKind::Return,
                                 sanitized,
                                 branch: branch_stack.last().copied(),
+                                line: ret_line,
                         ..Default::default()
                             });
                         fir.symbols.entry(name.clone()).or_insert_with(|| Symbol {
@@ -786,7 +802,7 @@ fn build_dfg(
                     let sanitized = find_symbol(&canonical, &fir.symbols)
                         .map(|s| s.sanitized)
                         .unwrap_or(false);
-                    let uid = stable_node_id(fir, Some(cond), &format!("if_cond_use:{name}"));
+                    let (uid, if_cond_line) = stable_node_id2(fir, Some(cond), &format!("if_cond_use:{name}"));
                     fir.dfg
                         .get_or_insert_with(DataFlowGraph::default)
                         .nodes
@@ -796,6 +812,7 @@ fn build_dfg(
                             kind: DFNodeKind::Use,
                             sanitized,
                             branch: branch_stack.last().copied(),
+                            line: if_cond_line,
                         ..Default::default()
                         });
                     fir.symbols.entry(name.clone()).or_insert_with(|| Symbol {
@@ -813,7 +830,7 @@ fn build_dfg(
                     }
                 }
             }
-            let bid = stable_node_id(fir, Some(node), "branch:if");
+            let (bid, if_line) = stable_node_id2(fir, Some(node), "branch:if");
             fir.dfg
                 .get_or_insert_with(DataFlowGraph::default)
                 .nodes
@@ -823,6 +840,7 @@ fn build_dfg(
                     kind: DFNodeKind::Branch,
                     sanitized: false,
                     branch: branch_stack.last().copied(),
+                    line: if_line,
                         ..Default::default()
                 });
             let before = fir.symbols.clone();
@@ -922,7 +940,7 @@ fn build_dfg(
                 }
             }
 
-            let bid = stable_node_id(fir, Some(node), "branch:try");
+            let (bid, try_line) = stable_node_id2(fir, Some(node), "branch:try");
             push_node(
                 fir,
                 DFNode {
@@ -931,6 +949,7 @@ fn build_dfg(
                     kind: DFNodeKind::Branch,
                     sanitized: false,
                     branch: branch_stack.last().copied(),
+                    line: try_line,
                         ..Default::default()
                 },
             );
@@ -1064,7 +1083,7 @@ fn build_dfg(
             return;
         }
         "while_statement" => {
-            let nid = stable_node_id(fir, Some(node), "branch:while");
+            let (nid, while_line) = stable_node_id2(fir, Some(node), "branch:while");
             push_node(
                 fir,
                 DFNode {
@@ -1073,6 +1092,7 @@ fn build_dfg(
                     kind: DFNodeKind::Branch,
                     sanitized: false,
                     branch: branch_stack.last().copied(),
+                    line: while_line,
                         ..Default::default()
                 },
             );
@@ -1084,7 +1104,7 @@ fn build_dfg(
                     let sanitized = find_symbol(&canonical, &fir.symbols)
                         .map(|s| s.sanitized)
                         .unwrap_or(false);
-                    let uid = stable_node_id(fir, Some(cond), &format!("while_cond_use:{name}"));
+                    let (uid, while_cond_line) = stable_node_id2(fir, Some(cond), &format!("while_cond_use:{name}"));
                     push_node(
                         fir,
                         DFNode {
@@ -1093,6 +1113,7 @@ fn build_dfg(
                             kind: DFNodeKind::Use,
                             sanitized,
                             branch: branch_stack.last().copied(),
+                            line: while_cond_line,
                         ..Default::default()
                         },
                     );
@@ -1155,7 +1176,7 @@ fn build_dfg(
                     merge_counter,
                 );
             }
-            let nid = stable_node_id(fir, Some(node), "branch:for");
+            let (nid, for_line) = stable_node_id2(fir, Some(node), "branch:for");
             push_node(
                 fir,
                 DFNode {
@@ -1164,6 +1185,7 @@ fn build_dfg(
                     kind: DFNodeKind::Branch,
                     sanitized: false,
                     branch: branch_stack.last().copied(),
+                    line: for_line,
                         ..Default::default()
                 },
             );
@@ -1175,7 +1197,7 @@ fn build_dfg(
                     let sanitized = find_symbol(&canonical, &fir.symbols)
                         .map(|s| s.sanitized)
                         .unwrap_or(false);
-                    let uid = stable_node_id(fir, Some(cond), &format!("for_cond_use:{name}"));
+                    let (uid, for_cond_line) = stable_node_id2(fir, Some(cond), &format!("for_cond_use:{name}"));
                     push_node(
                         fir,
                         DFNode {
@@ -1184,6 +1206,7 @@ fn build_dfg(
                             kind: DFNodeKind::Use,
                             sanitized,
                             branch: branch_stack.last().copied(),
+                            line: for_cond_line,
                         ..Default::default()
                         },
                     );
@@ -1246,7 +1269,7 @@ fn build_dfg(
             return;
         }
         "enhanced_for_statement" => {
-            let nid = stable_node_id(fir, Some(node), "branch:enhanced_for");
+            let (nid, efor_line) = stable_node_id2(fir, Some(node), "branch:enhanced_for");
             push_node(
                 fir,
                 DFNode {
@@ -1255,6 +1278,7 @@ fn build_dfg(
                     kind: DFNodeKind::Branch,
                     sanitized: false,
                     branch: branch_stack.last().copied(),
+                    line: efor_line,
                         ..Default::default()
                 },
             );
@@ -1266,7 +1290,7 @@ fn build_dfg(
                     let sanitized = find_symbol(&canonical, &fir.symbols)
                         .map(|s| s.sanitized)
                         .unwrap_or(false);
-                    let uid = stable_node_id(fir, Some(val), &format!("enhanced_for_use:{name}"));
+                    let (uid, efor_use_line) = stable_node_id2(fir, Some(val), &format!("enhanced_for_use:{name}"));
                     push_node(
                         fir,
                         DFNode {
@@ -1275,6 +1299,7 @@ fn build_dfg(
                             kind: DFNodeKind::Use,
                             sanitized,
                             branch: branch_stack.last().copied(),
+                            line: efor_use_line,
                         ..Default::default()
                         },
                     );
@@ -1320,7 +1345,7 @@ fn build_dfg(
             return;
         }
         "switch_statement" | "switch_expression" => {
-            let nid = stable_node_id(fir, Some(node), "branch:switch");
+            let (nid, switch_line) = stable_node_id2(fir, Some(node), "branch:switch");
             push_node(
                 fir,
                 DFNode {
@@ -1329,6 +1354,7 @@ fn build_dfg(
                     kind: DFNodeKind::Branch,
                     sanitized: false,
                     branch: branch_stack.last().copied(),
+                    line: switch_line,
                         ..Default::default()
                 },
             );
@@ -1343,7 +1369,7 @@ fn build_dfg(
                     let sanitized = find_symbol(&canonical, &fir.symbols)
                         .map(|s| s.sanitized)
                         .unwrap_or(false);
-                    let uid = stable_node_id(fir, Some(cond), &format!("switch_cond_use:{name}"));
+                    let (uid, switch_cond_line) = stable_node_id2(fir, Some(cond), &format!("switch_cond_use:{name}"));
                     push_node(
                         fir,
                         DFNode {
@@ -1352,6 +1378,7 @@ fn build_dfg(
                             kind: DFNodeKind::Use,
                             sanitized,
                             branch: branch_stack.last().copied(),
+                            line: switch_cond_line,
                         ..Default::default()
                         },
                     );
@@ -1435,7 +1462,7 @@ fn build_dfg(
         "method_reference" => {
             if let Ok(text) = node.utf8_text(src.as_bytes()) {
                 let name = text.replace("::", ".");
-                let id = stable_node_id(fir, Some(node), &format!("method_ref:{name}"));
+                let (id, mref_line) = stable_node_id2(fir, Some(node), &format!("method_ref:{name}"));
                 push_node(
                     fir,
                     DFNode {
@@ -1444,6 +1471,7 @@ fn build_dfg(
                         kind: DFNodeKind::Use,
                         sanitized: false,
                         branch: branch_stack.last().copied(),
+                        line: mref_line,
                         ..Default::default()
                     },
                 );
@@ -1454,7 +1482,7 @@ fn build_dfg(
             let mut ids = Vec::new();
             gather_ids(node, src, &mut ids);
             for name in ids {
-                let id = stable_node_id(fir, Some(node), &format!("return:{name}"));
+                let (id, ret_line) = stable_node_id2(fir, Some(node), &format!("return:{name}"));
                 let canonical = resolve_alias(&name, &fir.symbols);
                 let sanitized = find_symbol(&canonical, &fir.symbols)
                     .map(|s| s.sanitized)
@@ -1467,6 +1495,7 @@ fn build_dfg(
                         kind: DFNodeKind::Return,
                         sanitized,
                         branch: branch_stack.last().copied(),
+                        line: ret_line,
                         ..Default::default()
                     },
                 );
@@ -1521,8 +1550,8 @@ fn build_dfg(
                     let sanitized = find_symbol(&canonical, &fir.symbols)
                         .map(|s| s.sanitized)
                         .unwrap_or(false);
-                    let id =
-                        stable_node_id(fir, Some(obj_node), &format!("method_object_use:{var}"));
+                    let (id, obj_use_line) =
+                        stable_node_id2(fir, Some(obj_node), &format!("method_object_use:{var}"));
                     push_node(
                         fir,
                         DFNode {
@@ -1531,6 +1560,7 @@ fn build_dfg(
                             kind: DFNodeKind::Use,
                             sanitized,
                             branch: branch_stack.last().copied(),
+                            line: obj_use_line,
                         ..Default::default()
                         },
                     );
@@ -1555,8 +1585,8 @@ fn build_dfg(
                     let sanitized = find_symbol(&canonical, &fir.symbols)
                         .map(|s| s.sanitized)
                         .unwrap_or(false);
-                    let id =
-                        stable_node_id(fir, Some(*arg), &format!("method_arg_use:{idx}:{var}"));
+                    let (id, arg_use_line) =
+                        stable_node_id2(fir, Some(*arg), &format!("method_arg_use:{idx}:{var}"));
                     push_node(
                         fir,
                         DFNode {
@@ -1565,6 +1595,7 @@ fn build_dfg(
                             kind: DFNodeKind::Use,
                             sanitized,
                             branch: branch_stack.last().copied(),
+                            line: arg_use_line,
                         ..Default::default()
                         },
                     );
@@ -1657,7 +1688,7 @@ fn build_dfg(
                             sanitized_value = true;
                         }
 
-                        let def_id = stable_node_id(
+                        let (def_id, field_def_line) = stable_node_id2(
                             fir,
                             Some(*value_node),
                             &format!("method_field_def:{field}"),
@@ -1670,6 +1701,7 @@ fn build_dfg(
                                 kind: DFNodeKind::Def,
                                 sanitized: sanitized_value,
                                 branch: branch_stack.last().copied(),
+                                line: field_def_line,
                         ..Default::default()
                             },
                         );
@@ -1704,8 +1736,8 @@ fn build_dfg(
                     let sanitized = find_symbol(&canonical, &fir.symbols)
                         .map(|s| s.sanitized)
                         .unwrap_or(false);
-                    let use_id =
-                        stable_node_id(fir, Some(node), &format!("method_field_use:{field}"));
+                    let (use_id, field_use_line) =
+                        stable_node_id2(fir, Some(node), &format!("method_field_use:{field}"));
                     push_node(
                         fir,
                         DFNode {
@@ -1714,6 +1746,7 @@ fn build_dfg(
                             kind: DFNodeKind::Use,
                             sanitized,
                             branch: branch_stack.last().copied(),
+                            line: field_use_line,
                         ..Default::default()
                         },
                     );
@@ -1738,8 +1771,8 @@ fn build_dfg(
                         let sanitized = find_symbol(&canonical, &fir.symbols)
                             .map(|s| s.sanitized)
                             .unwrap_or(false);
-                        let id =
-                            stable_node_id(fir, Some(arg), &format!("object_create_use:{var}"));
+                        let (id, oc_use_line) =
+                            stable_node_id2(fir, Some(arg), &format!("object_create_use:{var}"));
                         push_node(
                             fir,
                             DFNode {
@@ -1748,6 +1781,7 @@ fn build_dfg(
                                 kind: DFNodeKind::Use,
                                 sanitized,
                                 branch: branch_stack.last().copied(),
+                                line: oc_use_line,
                         ..Default::default()
                             },
                         );
