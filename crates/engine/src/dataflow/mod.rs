@@ -1,3 +1,4 @@
+use crate::call_utils::parse_call;
 use ir::{AstNode, FileIR};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{OnceLock, RwLock, RwLockReadGuard};
@@ -76,64 +77,6 @@ fn walk(
     for c in &node.children {
         walk(c, src, cur, id_to_name, edges);
     }
-}
-
-fn parse_call(code: &str) -> Option<(String, Vec<String>)> {
-    let call = code.trim();
-    let mut open = None;
-    let mut paren = 0usize;
-    let mut angle = 0usize;
-    for (i, ch) in call.char_indices() {
-        match ch {
-            '<' => angle += 1,
-            '>' => angle = angle.saturating_sub(1),
-            '(' if angle == 0 => {
-                if paren == 0 {
-                    open = Some(i);
-                }
-                paren += 1;
-            }
-            ')' if angle == 0 => {
-                paren = paren.saturating_sub(1);
-                if paren == 0 {
-                    let open = open?;
-                    let name = call[..open].trim().to_string();
-                    let args_str = &call[open + 1..i];
-                    let args = split_args(args_str);
-                    return Some((name, args));
-                }
-            }
-            _ => {}
-        }
-    }
-    None
-}
-
-fn split_args(s: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut start = 0usize;
-    let mut paren = 0usize;
-    let mut angle = 0usize;
-    for (i, ch) in s.char_indices() {
-        match ch {
-            '(' => paren += 1,
-            ')' => paren = paren.saturating_sub(1),
-            '<' => angle += 1,
-            '>' => angle = angle.saturating_sub(1),
-            ',' if paren == 0 && angle == 0 => {
-                out.push(s[start..i].trim().to_string());
-                start = i + 1;
-            }
-            _ => {}
-        }
-    }
-    if start < s.len() {
-        let arg = s[start..].trim();
-        if !arg.is_empty() {
-            out.push(arg.to_string());
-        }
-    }
-    out
 }
 
 static CG: OnceLock<RwLock<CallGraph>> = OnceLock::new();
