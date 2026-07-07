@@ -59,6 +59,189 @@ pub use path::{
 use crate::debug::emit;
 use cache::rule_cache::{RuleCache, RuleCacheKey};
 
+// ── Inter-file taint state ────────────────────────────────────────────────────
+// Collects per-file source/sink data during parallel analysis; a sequential
+// second pass then connects them through the CallGraph.
+
+#[derive(Default)]
+struct InterFileTaintState {
+    /// rule_id → [(enclosing_func_name, file_path)]
+    source_funcs: HashMap<String, Vec<(String, String)>>,
+    /// rule_id → [(enclosing_func_name, file_path, sink_text, line, col, excerpt)]
+    sink_funcs: HashMap<String, Vec<(String, String, String, usize, usize, String)>>,
+}
+
+static INTER_FILE_TAINT: OnceLock<Mutex<InterFileTaintState>> = OnceLock::new();
+
+fn inter_file_state() -> &'static Mutex<InterFileTaintState> {
+    INTER_FILE_TAINT.get_or_init(|| Mutex::new(InterFileTaintState::default()))
+}
+
+fn reset_inter_file_state() {
+    if let Ok(mut s) = inter_file_state().lock() {
+        s.source_funcs.clear();
+        s.sink_funcs.clear();
+    }
+}
+
+/// Returns the qualified name (ClassName.methodName) of the function that
+/// contains `target_line` in the file's AST. Used for inter-file taint.
+fn enclosing_function_name(file: &FileIR, target_line: usize) -> Option<String> {
+    let ast = file.ast.as_ref()?;
+    let mut best: Option<(usize, String)> = None;
+    collect_func_for_line(&ast.nodes, target_line, None, &mut best);
+    best.map(|(_, name)| name)
+}
+
+fn collect_func_for_line(
+    nodes: &[AstNode],
+    target_line: usize,
+    class_ctx: Option<&str>,
+    best: &mut Option<(usize, String)>,
+) {
+    for node in nodes {
+        let cur_class: Option<&str> = if node.kind == "ClassDeclaration" {
+            node.value.as_str().or(class_ctx)
+        } else {
+            class_ctx
+        };
+        if (node.kind.contains("Function") || node.kind == "MethodDeclaration")
+            && node.meta.line <= target_line
+        {
+            if let Some(name) = node.value.as_str() {
+                let qualified = match cur_class {
+                    Some(cls) => format!("{cls}.{name}"),
+                    None => name.to_string(),
+                };
+                let start = node.meta.line;
+                if best.as_ref().map_or(true, |(l, _)| start >= *l) {
+                    *best = Some((start, qualified));
+                }
+            }
+        }
+        collect_func_for_line(&node.children, target_line, cur_class, best);
+    }
+}
+
+fn record_interfile_sources(rule: &CompiledRule, file: &FileIR, source_syms: &[(String, usize, usize)]) {
+    let mut state = match inter_file_state().lock() {
+        Ok(s) => s,
+        Err(e) => e.into_inner(),
+    };
+    let entry = state.source_funcs.entry(rule.id.clone()).or_default();
+    for (_, line, _) in source_syms {
+        if let Some(func) = enclosing_function_name(file, *line) {
+            let key = (func, file.file_path.clone());
+            if !entry.contains(&key) {
+                entry.push(key);
+            }
+        }
+    }
+}
+
+fn record_interfile_sinks(
+    rule: &CompiledRule,
+    file: &FileIR,
+    sink_hits: &[(String, usize, usize, String)],
+) {
+    let mut state = match inter_file_state().lock() {
+        Ok(s) => s,
+        Err(e) => e.into_inner(),
+    };
+    let entry = state.sink_funcs.entry(rule.id.clone()).or_default();
+    for (sink_text, line, col, excerpt) in sink_hits {
+        if let Some(func) = enclosing_function_name(file, *line) {
+            entry.push((
+                func,
+                file.file_path.clone(),
+                sink_text.clone(),
+                *line,
+                *col,
+                excerpt.clone(),
+            ));
+        }
+    }
+}
+
+/// Returns true if `callee` (from the CallGraph, e.g. "service.doThing") could
+/// refer to `sink_func` (class-qualified, e.g. "ServiceClass.doThing").
+/// Matches on the method-name suffix to bridge instance-variable vs class-name prefixes.
+fn callee_matches_sink_func(callee: &str, sink_func: &str) -> bool {
+    if callee == sink_func {
+        return true;
+    }
+    let callee_method = callee.rsplit_once('.').map(|(_, m)| m).unwrap_or(callee);
+    let sink_method = sink_func.rsplit_once('.').map(|(_, m)| m).unwrap_or(sink_func);
+    !callee_method.is_empty()
+        && !sink_method.is_empty()
+        && callee_method == sink_method
+        && callee.contains('.')
+}
+
+fn eval_interfile_taint(rules: &RuleSet) -> Vec<Finding> {
+    let state = match inter_file_state().lock() {
+        Ok(s) => s,
+        Err(e) => e.into_inner(),
+    };
+    let call_graph = dataflow::get_call_graph();
+    let mut findings: Vec<Finding> = Vec::new();
+    let mut seen_ids: HashSet<String> = HashSet::new();
+
+    for rule in &rules.rules {
+        if !matches!(rule.matcher, MatcherKind::TaintRule { .. }) {
+            continue;
+        }
+        let source_funcs = match state.source_funcs.get(&rule.id) {
+            Some(v) => v,
+            None => continue,
+        };
+        let sink_funcs = match state.sink_funcs.get(&rule.id) {
+            Some(v) => v,
+            None => continue,
+        };
+
+        for (src_func, src_file) in source_funcs {
+            let Some(callees) = call_graph.edges.get(src_func) else {
+                continue;
+            };
+            for (sink_func, sink_file, _sink_text, line, col, excerpt) in sink_funcs {
+                if src_file == sink_file {
+                    continue; // per-file analysis already handled this
+                }
+                let connected = callees
+                    .iter()
+                    .any(|callee| callee_matches_sink_func(callee, sink_func));
+                if !connected {
+                    continue;
+                }
+                let id = blake3::hash(
+                    format!("{}:{}:{}:{}", rule.id, sink_file, line, col).as_bytes(),
+                )
+                .to_hex()
+                .to_string();
+                if seen_ids.insert(id.clone()) {
+                    findings.push(Finding {
+                        id,
+                        rule_id: rule.id.clone(),
+                        rule_file: rule.source_file.clone(),
+                        severity: rule.severity,
+                        file: PathBuf::from(sink_file),
+                        line: *line,
+                        column: *col,
+                        excerpt: excerpt.clone(),
+                        message: rule.message.clone(),
+                        remediation: rule.remediation.clone(),
+                        fix: rule.fix.clone(),
+                    });
+                }
+            }
+        }
+    }
+    findings
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 pub fn parse_file_with_events(
     path: &Path,
     suppress_comment: Option<&str>,
@@ -966,6 +1149,7 @@ pub fn analyze_files_with_config(
     progress: Option<&Arc<dyn Fn(usize) + Send + Sync + 'static>>,
 ) -> Vec<Finding> {
     reset_function_taints();
+    reset_inter_file_state();
     configure_call_graph(files, rules);
     warmup_wasm_rules(rules);
     let rule_index = ApplicableRuleIndex::new(rules);
@@ -1029,6 +1213,9 @@ pub fn analyze_files_with_config(
         findings.extend(result.findings);
     }
     findings.extend(cached);
+
+    // Inter-file taint: connect sources in one file to sinks in a callee file.
+    findings.extend(eval_interfile_taint(rules));
 
     // Apply baseline filtering
     if let Some(baseline) = &cfg.baseline {
@@ -1448,21 +1635,23 @@ fn eval_rule_impl(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
 
             findings
         }
-        MatcherKind::TextRegexMulti {
-            allow,
-            deny,
-            inside,
-            not_inside,
-        } => {
-            debug!(rule=%rule.id, file=%file.file_path, kind="TextRegexMulti", allow=allow.len(), deny=deny.is_some(), inside=inside.len(), not_inside=not_inside.len());
+        MatcherKind::TextRegexMulti { subs } => {
+            debug!(rule=%rule.id, file=%file.file_path, kind="TextRegexMulti", subs=subs.len());
             let source = file.source.as_deref().unwrap_or("");
             let mut findings = Vec::new();
+            let aliases = use_aliases(file);
+            for sub in subs {
+            let allow = &sub.allow;
+            let deny = sub.deny.as_ref();
+            let inside = &sub.inside;
+            let not_inside = &sub.not_inside;
             let inside_ranges = regex_ranges_any(source, inside);
             let not_inside_ranges = regex_ranges_any(source, not_inside);
             if !inside.is_empty() && inside_ranges.is_empty() {
-                return findings;
+                // This sub requires a context (pattern-inside) not present in
+                // this file. Skip this sub and try sibling subs.
+                continue;
             }
-            let aliases = use_aliases(file);
             for (idx, (re, orig)) in allow.iter().enumerate() {
                 if re.is_fancy() {
                     debug!(
@@ -1736,6 +1925,7 @@ fn eval_rule_impl(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
                     }
                 }
             }
+            } // end for sub in subs
             findings
         }
         MatcherKind::JsonPathEq(path, val) => {
@@ -2278,6 +2468,11 @@ fn eval_rule_impl(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
                 "TaintRule: collected source symbols"
             );
 
+            // Record for the inter-file taint second pass.
+            if !source_syms.is_empty() {
+                record_interfile_sources(rule, file, &source_syms);
+            }
+
             debug!(
                 "TaintRule: Starting reclass processing for rule '{}' and file '{}'",
                 rule.id, file.file_path
@@ -2581,6 +2776,11 @@ fn eval_rule_impl(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
                     }
                 }
             }
+            // Record for the inter-file taint second pass.
+            if !sink_hits.is_empty() {
+                record_interfile_sinks(rule, file, &sink_hits);
+            }
+
             let has_flow = tracker.as_ref().map(|t| t.has_flow()).unwrap_or(true);
             let collect_sink_vars = |sink_text: &str, excerpt: &str, column: usize| {
                 let mut vars: Vec<String> = extract_sink_variables(sink_text)

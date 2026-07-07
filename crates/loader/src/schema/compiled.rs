@@ -197,21 +197,13 @@ pub(crate) fn log_rule_summary(rule: &CompiledRule) {
                 "compiled text regex rule"
             );
         }
-        MatcherKind::TextRegexMulti {
-            allow,
-            deny,
-            inside,
-            not_inside,
-        } => {
+        MatcherKind::TextRegexMulti { subs } => {
             debug!(
                 rule_id = %rule.id,
                 matcher = "text_regex_multi",
                 message = %rule.message,
                 file = ?rule.source_file,
-                allow = allow.len(),
-                deny = deny.is_some(),
-                inside = inside.len(),
-                not_inside = not_inside.len(),
+                subs = subs.len(),
                 "compiled contextual text rule"
             );
         }

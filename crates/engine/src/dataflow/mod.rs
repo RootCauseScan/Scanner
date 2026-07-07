@@ -64,22 +64,29 @@ fn walk(
     if node.kind.contains("Function") || node.kind == "MethodDeclaration" {
         cur = Some(node.id);
     }
-    if node.kind == "CallExpression" || node.kind == "Call" {
+    let is_call = node.kind == "CallExpression"
+        || node.kind == "Call"
+        || node.kind == "MethodInvocation";
+    if is_call {
         if let Some(caller_id) = cur {
-            let line = node.meta.line;
-            let code = lines.get(line.saturating_sub(1)).copied().unwrap_or("").trim();
-            let call_part = if let Some(eq) = code.find('=') {
-                code[eq + 1..].trim()
+            // Java AST: MethodInvocation nodes store the callee path in `value`.
+            let callee_opt = if node.kind == "MethodInvocation" {
+                node.value.as_str().map(|s| s.to_string())
             } else {
-                code
+                let line = node.meta.line;
+                let code = lines.get(line.saturating_sub(1)).copied().unwrap_or("").trim();
+                let call_part = if let Some(eq) = code.find('=') {
+                    code[eq + 1..].trim()
+                } else {
+                    code
+                };
+                parse_call(call_part).map(|(c, _)| c)
             };
-            if let Some((callee, _)) = parse_call(call_part) {
-                if let Some(caller) = id_to_name.get(&caller_id) {
-                    edges
-                        .entry(caller.clone())
-                        .or_default()
-                        .insert(callee.clone());
-                }
+            if let (Some(callee), Some(caller)) = (callee_opt, id_to_name.get(&caller_id)) {
+                edges
+                    .entry(caller.clone())
+                    .or_default()
+                    .insert(callee);
             }
         }
     }

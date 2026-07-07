@@ -193,11 +193,10 @@ mod tests {
         let rs = load_rules(dir.path()).unwrap();
         assert_eq!(rs.rules.len(), 1);
         match &rs.rules[0].matcher {
-            MatcherKind::TextRegexMulti {
-                inside, not_inside, ..
-            } => {
-                assert_eq!(inside.len(), 1);
-                assert_eq!(not_inside.len(), 1);
+            MatcherKind::TextRegexMulti { subs } => {
+                assert_eq!(subs.len(), 1);
+                assert_eq!(subs[0].inside.len(), 1);
+                assert_eq!(subs[0].not_inside.len(), 1);
             }
             _ => panic!("expected TextRegexMulti"),
         }
@@ -241,17 +240,17 @@ mod tests {
   severity: LOW
   patterns:
     - pattern: foo(...)
-      pattern-either:
-        - pattern-inside: bar(...)
-        - pattern-not-inside: baz(...)
+    - pattern-inside: bar(...)
 "#;
         fs::write(dir.path().join("nested.yml"), rule_yaml).unwrap();
         let rs = load_rules(dir.path()).unwrap();
         assert_eq!(rs.rules.len(), 1);
         match &rs.rules[0].matcher {
-            MatcherKind::TextRegexMulti { allow, inside, .. } => {
-                assert_eq!(allow.len(), 1);
-                assert_eq!(inside.len(), 1);
+            MatcherKind::TextRegexMulti { subs } => {
+                // One sub-matcher: allow=foo(...) scoped to inside=bar(...)
+                assert_eq!(subs.len(), 1);
+                assert_eq!(subs[0].allow.len(), 1);
+                assert_eq!(subs[0].inside.len(), 1);
             }
             _ => panic!("expected TextRegexMulti"),
         }
@@ -373,9 +372,12 @@ mod tests {
         let rs = load_rules(dir.path()).unwrap();
         assert_eq!(rs.rules.len(), 1);
         match &rs.rules[0].matcher {
-            MatcherKind::TextRegexMulti { allow, .. } => {
+            MatcherKind::TextRegexMulti { subs } => {
                 let snippet = "free(ptr);\nlog(ptr);\nrelease(ptr);";
-                assert!(allow.iter().any(|(re, _)| re.is_match(snippet)));
+                assert!(subs
+                    .iter()
+                    .flat_map(|s| &s.allow)
+                    .any(|(re, _)| re.is_match(snippet)));
             }
             _ => panic!("expected TextRegexMulti"),
         }
