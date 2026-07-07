@@ -851,11 +851,14 @@ struct FileToAnalyze<'a> {
 struct FileAnalysisResult {
     hash: Option<String>,
     findings: Vec<Finding>,
+    metrics: Option<EngineMetrics>,
 }
 
 fn analyze_files_inner(
     files: &[FileToAnalyze<'_>],
     rule_index: &ApplicableRuleIndex<'_>,
+    cfg: &EngineConfig,
+    collect_metrics: bool,
     progress: Option<&Arc<dyn Fn(usize) + Send + Sync + 'static>>,
 ) -> Vec<FileAnalysisResult> {
     debug!(
@@ -867,7 +870,17 @@ fn analyze_files_inner(
         .map(|item| {
             let display_id = item.hash.as_deref().unwrap_or(&item.file.file_path);
             debug!("analyze_files_inner: Processing file '{}'", display_id);
-            let findings = analyze_file_inner(item.file, rule_index);
+            let mut per_file_metrics = if collect_metrics {
+                Some(EngineMetrics::default())
+            } else {
+                None
+            };
+            let findings = analyze_file_with_config_inner(
+                item.file,
+                rule_index,
+                cfg,
+                per_file_metrics.as_mut(),
+            );
             debug!(
                 "analyze_files_inner: Completed processing file '{}', found {} findings",
                 display_id,
@@ -879,6 +892,7 @@ fn analyze_files_inner(
             FileAnalysisResult {
                 hash: item.hash.clone(),
                 findings,
+                metrics: per_file_metrics,
             }
         })
         .collect();
@@ -951,7 +965,7 @@ pub fn analyze_files_with_config(
     mut metrics: Option<&mut EngineMetrics>,
     progress: Option<&Arc<dyn Fn(usize) + Send + Sync + 'static>>,
 ) -> Vec<Finding> {
-    function_taint::reset_function_taints();
+    reset_function_taints();
     configure_call_graph(files, rules);
     warmup_wasm_rules(rules);
     let rule_index = ApplicableRuleIndex::new(rules);
@@ -991,48 +1005,29 @@ pub fn analyze_files_with_config(
         }
     }
 
-    let mut findings =
-        if cfg.file_timeout.is_none() && cfg.rule_timeout.is_none() && metrics.is_none() {
-            analyze_files_inner(&to_analyze, &rule_index, progress)
-                .into_iter()
-                .flat_map(|result| {
-                    if let Some(hash) = result.hash.as_ref() {
-                        if let Some(rules_hash) = rules_hash.as_deref() {
-                            if let Some(c) = cache.as_deref_mut() {
-                                c.insert(hash.clone(), result.findings.clone(), rules_hash);
-                            }
-                        }
-                    }
-                    result.findings.into_iter()
-                })
-                .collect()
-        } else {
-            let mut out = Vec::new();
-            for (idx, item) in to_analyze.into_iter().enumerate() {
-                let f = item.file;
-                let hash = item.hash;
-                debug!(
-                    "Config analysis: processing file {}/{}: {}",
-                    idx + 1,
-                    files.len(),
-                    f.file_path
-                );
-                let mut res =
-                    analyze_file_with_config_inner(f, &rule_index, cfg, metrics.as_deref_mut());
-                if let Some(rules_hash) = rules_hash.as_deref() {
-                    if let Some(c) = cache.as_deref_mut() {
-                        if let Some(hash_value) = hash.as_ref() {
-                            c.insert(hash_value.clone(), res.clone(), rules_hash);
-                        }
-                    }
+    let collect_metrics = metrics.is_some();
+    let parallel_results =
+        analyze_files_inner(&to_analyze, &rule_index, cfg, collect_metrics, progress);
+
+    let mut findings: Vec<Finding> = Vec::new();
+    for result in parallel_results {
+        if let Some(hash) = result.hash.as_ref() {
+            if let Some(rules_hash) = rules_hash.as_deref() {
+                if let Some(c) = cache.as_deref_mut() {
+                    c.insert(hash.clone(), result.findings.clone(), rules_hash);
                 }
-                if let Some(cb) = progress {
-                    cb(1);
-                }
-                out.append(&mut res);
             }
-            out
-        };
+        }
+        if let (Some(m), Some(per_file)) = (metrics.as_deref_mut(), result.metrics) {
+            for (k, v) in per_file.file_times_ms {
+                m.file_times_ms.insert(k, v);
+            }
+            for (k, v) in per_file.rule_times_ms {
+                *m.rule_times_ms.entry(k).or_insert(0) += v;
+            }
+        }
+        findings.extend(result.findings);
+    }
     findings.extend(cached);
 
     // Apply baseline filtering
@@ -1817,7 +1812,7 @@ fn eval_rule_impl(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
             let source_text = file.source.as_deref().unwrap_or("");
             let tracker = if !rule.sources.is_empty() && !rule.sinks.is_empty() {
                 let graph = dataflow::get_call_graph();
-                let mut t = dataflow::TaintTracker::new(&graph);
+                let mut t = dataflow::TaintTracker::new(graph);
                 for s in &rule.sources {
                     t.mark_source(s);
                 }
