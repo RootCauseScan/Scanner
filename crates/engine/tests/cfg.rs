@@ -1,4 +1,4 @@
-use engine::{build_file_cfg, prepare_file};
+use engine::{build_file_cfg, find_taint_path, prepare_file};
 use ir::CfgEdgeKind;
 use std::path::PathBuf;
 
@@ -63,4 +63,40 @@ fn java_cfg_block_ids_stamped_on_dfg_nodes() {
 fn build_file_cfg_returns_none_for_unknown_language() {
     let fir = ir::FileIR::new("test.rb".into(), "ruby".into());
     assert!(build_file_cfg(&fir).is_none());
+}
+
+#[test]
+fn java_taint_source_flows_to_sink() {
+    let fir = parse_java("../../examples/fixtures/java/java.taint/bad.java");
+    if fir.file_path == "missing" {
+        return;
+    }
+    let result = find_taint_path(&fir, "source", "sink");
+    assert!(result.is_some(), "expected taint path in bad.java, got None");
+}
+
+#[test]
+fn java_taint_sanitized_path_is_clean() {
+    let fir = parse_java("../../examples/fixtures/java/java.taint/good.java");
+    if fir.file_path == "missing" {
+        return;
+    }
+    assert_eq!(
+        find_taint_path(&fir, "source", "sink"),
+        None,
+        "sanitized java flow should not produce a taint path"
+    );
+}
+
+#[test]
+fn java_taint_unrelated_path_produces_no_finding() {
+    let fir = parse_java("../../examples/fixtures/java/java.taint/missing.java");
+    if fir.file_path == "missing" {
+        return;
+    }
+    assert_eq!(
+        find_taint_path(&fir, "source", "sink"),
+        None,
+        "java file without sink() call should produce no path"
+    );
 }

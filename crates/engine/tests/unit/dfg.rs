@@ -85,6 +85,33 @@ fn ignores_unrelated_flow_in_go() {
 }
 
 #[test]
+fn detects_unsanitized_flow_in_java() {
+    let file = parse("../../examples/fixtures/java/java.taint/bad.java");
+    let result = find_taint_path(&file, "source", "sink");
+    assert!(result.is_some(), "expected taint path in bad.java, got None");
+}
+
+#[test]
+fn ignores_sanitized_flow_in_java() {
+    let file = parse("../../examples/fixtures/java/java.taint/good.java");
+    assert_eq!(
+        find_taint_path(&file, "source", "sink"),
+        None,
+        "sanitized java flow should not produce a path"
+    );
+}
+
+#[test]
+fn ignores_unrelated_flow_in_java() {
+    let file = parse("../../examples/fixtures/java/java.taint/missing.java");
+    assert_eq!(
+        find_taint_path(&file, "source", "sink"),
+        None,
+        "java file without sink() call should produce no path"
+    );
+}
+
+#[test]
 fn debug_php_good_dfg() {
     let file = parse("../../examples/fixtures/php/taint/good.php");
     println!("DFG nodes:");

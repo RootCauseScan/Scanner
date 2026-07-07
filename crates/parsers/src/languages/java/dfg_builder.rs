@@ -638,33 +638,41 @@ fn build_dfg(
                             let mut ids = Vec::new();
                             let mut sanitized = false;
                             if let Some(val) = child.child_by_field_name("value") {
-                                if val.kind() != "lambda_expression"
-                                    && val.kind() != "method_reference"
-                                {
-                                    let mut call_sanitizer = false;
-                                    if let Some(call) = extract_call_path(val, src) {
-                                        if resolve_import(&call, imports, wildcards)
-                                            .into_iter()
-                                            .chain(std::iter::once(call.clone()))
-                                            .any(|f| {
-                                                catalog_module::is_sanitizer("java", &f)
-                                                    || matches!(
-                                                        fir.symbol_types.get(&f),
-                                                        Some(SymbolKind::Sanitizer)
-                                                    )
-                                            })
-                                        {
-                                            sanitized = true;
-                                            call_sanitizer = true;
-                                        }
-                                        if let Some(args) = val.child_by_field_name("arguments") {
-                                            gather_ids(args, src, &mut ids);
-                                        }
-                                        if !call_sanitizer {
+                                let vkind = val.kind();
+                                if vkind != "lambda_expression" && vkind != "method_reference" {
+                                    // Constant/literal initializers cannot carry taint.
+                                    if vkind.ends_with("_literal")
+                                        || vkind == "true"
+                                        || vkind == "false"
+                                        || vkind == "null_literal"
+                                    {
+                                        sanitized = true;
+                                    } else {
+                                        let mut call_sanitizer = false;
+                                        if let Some(call) = extract_call_path(val, src) {
+                                            if resolve_import(&call, imports, wildcards)
+                                                .into_iter()
+                                                .chain(std::iter::once(call.clone()))
+                                                .any(|f| {
+                                                    catalog_module::is_sanitizer("java", &f)
+                                                        || matches!(
+                                                            fir.symbol_types.get(&f),
+                                                            Some(SymbolKind::Sanitizer)
+                                                        )
+                                                })
+                                            {
+                                                sanitized = true;
+                                                call_sanitizer = true;
+                                            }
+                                            if let Some(args) = val.child_by_field_name("arguments") {
+                                                gather_ids(args, src, &mut ids);
+                                            }
+                                            if !call_sanitizer {
+                                                gather_ids(val, src, &mut ids);
+                                            }
+                                        } else {
                                             gather_ids(val, src, &mut ids);
                                         }
-                                    } else {
-                                        gather_ids(val, src, &mut ids);
                                     }
                                 }
                             }
@@ -739,32 +747,40 @@ fn build_dfg(
                     let mut ids = Vec::new();
                     let mut sanitized = false;
                     if let Some(right) = node.child_by_field_name("right") {
-                        if right.kind() != "lambda_expression" && right.kind() != "method_reference"
-                        {
-                            let mut call_sanitizer = false;
-                            if let Some(call) = extract_call_path(right, src) {
-                                if resolve_import(&call, imports, wildcards)
-                                    .into_iter()
-                                    .chain(std::iter::once(call.clone()))
-                                    .any(|f| {
-                                        catalog_module::is_sanitizer("java", &f)
-                                            || matches!(
-                                                fir.symbol_types.get(&f),
-                                                Some(SymbolKind::Sanitizer)
-                                            )
-                                    })
-                                {
-                                    sanitized = true;
-                                    call_sanitizer = true;
-                                }
-                                if let Some(args) = right.child_by_field_name("arguments") {
-                                    gather_ids(args, src, &mut ids);
-                                }
-                                if !call_sanitizer {
+                        let rkind = right.kind();
+                        if rkind != "lambda_expression" && rkind != "method_reference" {
+                            if rkind.ends_with("_literal")
+                                || rkind == "true"
+                                || rkind == "false"
+                                || rkind == "null_literal"
+                            {
+                                sanitized = true;
+                            } else {
+                                let mut call_sanitizer = false;
+                                if let Some(call) = extract_call_path(right, src) {
+                                    if resolve_import(&call, imports, wildcards)
+                                        .into_iter()
+                                        .chain(std::iter::once(call.clone()))
+                                        .any(|f| {
+                                            catalog_module::is_sanitizer("java", &f)
+                                                || matches!(
+                                                    fir.symbol_types.get(&f),
+                                                    Some(SymbolKind::Sanitizer)
+                                                )
+                                        })
+                                    {
+                                        sanitized = true;
+                                        call_sanitizer = true;
+                                    }
+                                    if let Some(args) = right.child_by_field_name("arguments") {
+                                        gather_ids(args, src, &mut ids);
+                                    }
+                                    if !call_sanitizer {
+                                        gather_ids(right, src, &mut ids);
+                                    }
+                                } else {
                                     gather_ids(right, src, &mut ids);
                                 }
-                            } else {
-                                gather_ids(right, src, &mut ids);
                             }
                         }
                     }
@@ -1180,22 +1196,28 @@ fn build_dfg(
                         *branch_counter += 1;
                         fir.symbols = before.clone();
                         branch_stack.push(id);
-                        if let Some(param) = child.child_by_field_name("parameter") {
-                            build_dfg(
-                                param,
-                                src,
-                                fir,
-                                imports,
-                                wildcards,
-                                current_fn,
-                                fn_ids,
-                                fn_params,
-                                fn_returns,
-                                call_args,
-                                branch_stack,
-                                branch_counter,
-                                merge_counter,
-                            );
+                        // tree-sitter-java does not expose the catch parameter as a named
+                        // field; find it by kind instead.
+                        let mut cc = child.walk();
+                        for part in child.children(&mut cc) {
+                            if part.kind() == "catch_formal_parameter" {
+                                build_dfg(
+                                    part,
+                                    src,
+                                    fir,
+                                    imports,
+                                    wildcards,
+                                    current_fn,
+                                    fn_ids,
+                                    fn_params,
+                                    fn_returns,
+                                    call_args,
+                                    branch_stack,
+                                    branch_counter,
+                                    merge_counter,
+                                );
+                                break;
+                            }
                         }
                         let mut body = child.child_by_field_name("body");
                         if body.is_none() {
