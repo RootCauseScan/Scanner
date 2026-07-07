@@ -135,6 +135,18 @@ pub fn find_taint_path(fir: &FileIR, _source: &str, _sink: &str) -> Option<Vec<u
     while let Some((current, path)) = queue.pop_front() {
         let cur_node = &dfg.nodes[current];
         if matches!(cur_node.kind, ir::DFNodeKind::Use) && is_unsanitized(fir, &cur_node.name) {
+            // Prune paths that are CFG-unreachable (e.g. sink is dead code after a return).
+            if let Some(cfg) = &fir.cfg {
+                if let (Some(src_idx), Some(sink_idx)) = (path.first(), path.last()) {
+                    let src_block = dfg.nodes[*src_idx].block_id;
+                    let sink_block = dfg.nodes[*sink_idx].block_id;
+                    if let (Some(sb), Some(tb)) = (src_block, sink_block) {
+                        if !cfg.is_reachable(sb, tb) {
+                            continue; // dead path — skip without returning
+                        }
+                    }
+                }
+            }
             return Some(path);
         }
 
