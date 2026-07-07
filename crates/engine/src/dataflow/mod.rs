@@ -1,11 +1,11 @@
 use ir::{AstNode, FileIR};
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::sync::{OnceLock, RwLock, RwLockReadGuard};
+use std::sync::{Arc, OnceLock, RwLock};
 
-/// Graph of function calls.
+/// Graph of function calls (directed: caller → callee).
 #[derive(Debug, Clone, Default)]
 pub struct CallGraph {
-    pub edges: HashMap<String, HashSet<String>>, // undirected for simple reachability
+    pub edges: HashMap<String, HashSet<String>>, // directed: caller → callee
 }
 
 impl CallGraph {
@@ -15,12 +15,13 @@ impl CallGraph {
         for f in files {
             let Some(ast) = &f.ast else { continue };
             let src = f.source.as_deref().unwrap_or("");
+            let lines: Vec<&str> = src.lines().collect();
             let mut id_to_name = HashMap::new();
             for n in &ast.nodes {
-                collect_names(n, &mut id_to_name);
+                collect_names(n, &mut id_to_name, None);
             }
             for n in &ast.nodes {
-                walk(n, src, None, &id_to_name, &mut edges);
+                walk(n, &lines, None, &id_to_name, &mut edges);
             }
         }
         Self { edges }
@@ -31,55 +32,66 @@ impl CallGraph {
     }
 }
 
-fn collect_names(node: &AstNode, map: &mut HashMap<usize, String>) {
-    if node.kind.contains("Function") {
+fn collect_names(node: &AstNode, map: &mut HashMap<usize, String>, class_ctx: Option<&str>) {
+    let mut cur_class = class_ctx;
+    if node.kind == "ClassDeclaration" {
         if let Some(name) = node.value.as_str() {
-            map.insert(node.id, name.to_string());
+            cur_class = Some(name);
+        }
+    }
+    if node.kind.contains("Function") || node.kind == "MethodDeclaration" {
+        if let Some(name) = node.value.as_str() {
+            let qualified = match cur_class {
+                Some(cls) => format!("{cls}.{name}"),
+                None => name.to_string(),
+            };
+            map.insert(node.id, qualified);
         }
     }
     for c in &node.children {
-        collect_names(c, map);
+        collect_names(c, map, cur_class);
     }
 }
 
 fn walk(
     node: &AstNode,
-    src: &str,
+    lines: &[&str],
     current: Option<usize>,
     id_to_name: &HashMap<usize, String>,
     edges: &mut HashMap<String, HashSet<String>>,
 ) {
     let mut cur = current;
-    if node.kind.contains("Function") {
+    if node.kind.contains("Function") || node.kind == "MethodDeclaration" {
         cur = Some(node.id);
     }
-    if node.kind == "CallExpression" || node.kind == "Call" {
+    let is_call = node.kind == "CallExpression"
+        || node.kind == "Call"
+        || node.kind == "MethodInvocation";
+    if is_call {
         if let Some(caller_id) = cur {
-            let line = node.meta.line;
-            let code = src.lines().nth(line - 1).unwrap_or("").trim();
-            let call_part = if let Some(eq) = code.find('=') {
-                code[eq + 1..].trim()
+            // Java AST: MethodInvocation nodes store the callee path in `value`.
+            let callee_opt = if node.kind == "MethodInvocation" {
+                node.value.as_str().map(|s| s.to_string())
             } else {
-                code
+                let line = node.meta.line;
+                let code = lines.get(line.saturating_sub(1)).copied().unwrap_or("").trim();
+                let call_part = if let Some(eq) = code.find('=') {
+                    code[eq + 1..].trim()
+                } else {
+                    code
+                };
+                parse_call(call_part).map(|(c, _)| c)
             };
-            if let Some((callee, _)) = parse_call(call_part) {
-                if let Some(caller) = id_to_name.get(&caller_id) {
-                    edges
-                        .entry(caller.clone())
-                        .or_default()
-                        .insert(callee.clone());
-                    // Insert reverse edge so has_flow() BFS can traverse
-                    // from a source to a sibling sink via their common caller.
-                    edges
-                        .entry(callee)
-                        .or_default()
-                        .insert(caller.clone());
-                }
+            if let (Some(callee), Some(caller)) = (callee_opt, id_to_name.get(&caller_id)) {
+                edges
+                    .entry(caller.clone())
+                    .or_default()
+                    .insert(callee);
             }
         }
     }
     for c in &node.children {
-        walk(c, src, cur, id_to_name, edges);
+        walk(c, lines, cur, id_to_name, edges);
     }
 }
 
@@ -141,35 +153,35 @@ fn split_args(s: &str) -> Vec<String> {
     out
 }
 
-static CG: OnceLock<RwLock<CallGraph>> = OnceLock::new();
+static CG: OnceLock<RwLock<Arc<CallGraph>>> = OnceLock::new();
 
-fn cg_lock() -> &'static RwLock<CallGraph> {
-    CG.get_or_init(|| RwLock::new(CallGraph::default()))
+fn cg_lock() -> &'static RwLock<Arc<CallGraph>> {
+    CG.get_or_init(|| RwLock::new(Arc::new(CallGraph::default())))
 }
 
 /// Replace the global call graph.
 pub fn set_call_graph(g: CallGraph) {
     if let Ok(mut cg) = cg_lock().write() {
-        *cg = g;
+        *cg = Arc::new(g);
     }
 }
 
-/// Access the global call graph.
-pub fn get_call_graph() -> RwLockReadGuard<'static, CallGraph> {
-    cg_lock().read().expect("call graph lock poisoned")
+/// Access the global call graph as a cheap Arc clone.
+pub fn get_call_graph() -> Arc<CallGraph> {
+    cg_lock().read().expect("call graph lock poisoned").clone()
 }
 
 /// Tracks taint propagation between functions using the call graph.
 pub struct TaintTracker {
-    graph: CallGraph,
+    graph: Arc<CallGraph>,
     sources: HashSet<String>,
     sinks: HashSet<String>,
 }
 
 impl TaintTracker {
-    pub fn new(graph: &CallGraph) -> Self {
+    pub fn new(graph: Arc<CallGraph>) -> Self {
         Self {
-            graph: graph.clone(),
+            graph,
             sources: HashSet::new(),
             sinks: HashSet::new(),
         }
@@ -183,7 +195,7 @@ impl TaintTracker {
         self.sinks.insert(name.to_string());
     }
 
-    /// Returns true if a sink is reachable from any source.
+    /// Returns true if a sink is reachable from any source via the directed call graph.
     pub fn has_flow(&self) -> bool {
         let mut visited = HashSet::new();
         let mut q: VecDeque<String> = self.sources.iter().cloned().collect();
