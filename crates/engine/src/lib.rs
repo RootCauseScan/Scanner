@@ -40,7 +40,7 @@ pub mod regex_ext;
 pub use cache::AnalysisCache;
 pub use cfg::{build_cfg, build_file_cfg, has_unsanitized_route};
 pub use debug::{set_debug_sink, DebugEvent, DebugSink};
-pub use dfg::{build_dfg, link_nodes, mark_sanitized};
+pub use dfg::{build_dfg, link_cfg_to_dfg, link_nodes, mark_sanitized};
 pub use function_taint::{
     all_function_taints, get_function_taint, record_function_taints, reset_function_taints,
     FunctionTaint,
@@ -59,6 +59,18 @@ pub use path::{
 
 use crate::debug::emit;
 use cache::rule_cache::{RuleCache, RuleCacheKey};
+
+/// Ensures a FileIR has both a DFG and a CFG, then links them.
+/// Safe to call multiple times (idempotent due to early-return guards in each sub-step).
+pub fn prepare_file(file: &mut ir::FileIR) {
+    if file.dfg.is_none() {
+        let _ = dfg::build_dfg(file);
+    }
+    if file.cfg.is_none() {
+        file.cfg = cfg::build_file_cfg(file);
+    }
+    dfg::link_cfg_to_dfg(file);
+}
 
 pub fn parse_file_with_events(
     path: &Path,
