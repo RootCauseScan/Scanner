@@ -66,6 +66,25 @@ fn ignores_unrelated_flow_in_php() {
 }
 
 #[test]
+fn detects_unsanitized_flow_in_go() {
+    let file = parse("../../examples/fixtures/go/taint/bad.go");
+    let result = find_taint_path(&file, "source", "sink");
+    assert!(result.is_some(), "expected taint path in bad.go, got None");
+}
+
+#[test]
+fn ignores_sanitized_flow_in_go() {
+    let file = parse("../../examples/fixtures/go/taint/good.go");
+    assert_eq!(find_taint_path(&file, "source", "sink"), None);
+}
+
+#[test]
+fn ignores_unrelated_flow_in_go() {
+    let file = parse("../../examples/fixtures/go/taint/missing.go");
+    assert_eq!(find_taint_path(&file, "source", "sink"), None);
+}
+
+#[test]
 fn debug_php_good_dfg() {
     let file = parse("../../examples/fixtures/php/taint/good.php");
     println!("DFG nodes:");

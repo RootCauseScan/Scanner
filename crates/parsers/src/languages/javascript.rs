@@ -432,8 +432,6 @@ fn build_dfg(
                         merges_to_add.push((var, line, sources));
                     }
                 }
-                drop(dfg);
-
                 for (var, ln, sources) in merges_to_add {
                     let merge_id = push_dfg_node(fir, var.clone(), DFNodeKind::Assign, ln);
                     let dfg = fir.dfg.get_or_insert_with(DataFlowGraph::default);
