@@ -216,6 +216,7 @@ pub fn parse_typescript(content: &str, fir: &mut FileIR) {
                                                 kind: DFNodeKind::Def,
                                                 sanitized: false,
                                                 branch: None,
+                        ..Default::default()
                                             });
                                             scopes.last_mut().expect("scope").insert(
                                                 var.to_string(),
@@ -264,6 +265,7 @@ pub fn parse_typescript(content: &str, fir: &mut FileIR) {
                                                 kind: DFNodeKind::Use,
                                                 sanitized: false,
                                                 branch: None,
+                        ..Default::default()
                                             });
                                             for scope in scopes.iter().rev() {
                                                 if let Some(sym) = scope.get(var) {

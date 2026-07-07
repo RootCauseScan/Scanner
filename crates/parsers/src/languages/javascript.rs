@@ -260,6 +260,7 @@ fn push_dfg_node(fir: &mut FileIR, name: String, kind: DFNodeKind) -> usize {
         kind,
         sanitized: false,
         branch: None,
+                        ..Default::default()
     });
     id
 }

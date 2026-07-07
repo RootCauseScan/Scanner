@@ -14,7 +14,7 @@ use serde_json::Value as JsonValue;
 use std::collections::{HashMap, HashSet};
 
 pub use ast::{AstNode, FileAst, Meta};
-pub use cfg::{CFGNode, CFG};
+pub use cfg::{BasicBlock, CfgEdge, CfgEdgeKind, FileCFG, CFGNode, CFG};
 pub use dfg::{stable_id, DFNode, DFNodeKind, DataFlowGraph, Symbol};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -55,6 +55,9 @@ pub struct FileIR {
     /// Lines with suppression comments.
     pub suppressed: HashSet<usize>,
     pub dfg: Option<DataFlowGraph>,
+    /// Real basic-block CFG built by the engine (None until prepare_file runs).
+    #[serde(default)]
+    pub cfg: Option<FileCFG>,
     pub symbols: HashMap<String, Symbol>,
     /// Logical type associated with each symbol.
     #[serde(default)]
@@ -92,6 +95,7 @@ impl FileIR {
             source: None,
             suppressed: HashSet::new(),
             dfg: None,
+            cfg: None,
             symbols: HashMap::new(),
             symbol_types: HashMap::new(),
             symbol_scopes: HashMap::new(),

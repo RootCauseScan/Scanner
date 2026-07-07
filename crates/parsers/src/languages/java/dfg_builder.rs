@@ -274,6 +274,7 @@ fn merge_states(fir: &mut FileIR, states: Vec<HashMap<String, Symbol>>, merge_co
                         kind: DFNodeKind::Assign,
                         sanitized: sanitized_all,
                         branch: None,
+                        ..Default::default()
                     },
                 );
                 for d in &defs {
@@ -362,6 +363,7 @@ fn build_dfg(
                             kind: DFNodeKind::Def,
                             sanitized: false,
                             branch: branch_stack.last().copied(),
+                        ..Default::default()
                         },
                     );
                     fn_ids.insert(name.to_string(), id);
@@ -384,6 +386,7 @@ fn build_dfg(
                                                 kind: DFNodeKind::Param,
                                                 sanitized: false,
                                                 branch: branch_stack.last().copied(),
+                        ..Default::default()
                                             },
                                         );
                                         fn_params.entry(id).or_default().push(pid);
@@ -472,6 +475,7 @@ fn build_dfg(
                                     kind: DFNodeKind::Def,
                                     sanitized,
                                     branch: branch_stack.last().copied(),
+                        ..Default::default()
                                 });
                             let mut sym = Symbol {
                                 name: var.to_string(),
@@ -585,6 +589,7 @@ fn build_dfg(
                             kind: DFNodeKind::Def,
                             sanitized: sanitized || alias_sanitized,
                             branch: branch_stack.last().copied(),
+                        ..Default::default()
                         });
                     let canonical_names: Vec<String> = ids
                         .iter()
@@ -680,6 +685,7 @@ fn build_dfg(
                     kind: DFNodeKind::Def,
                     sanitized: false,
                     branch: branch_stack.last().copied(),
+                        ..Default::default()
                 },
             );
             if let Some(params) = node.child_by_field_name("parameters") {
@@ -695,6 +701,7 @@ fn build_dfg(
                             kind: DFNodeKind::Param,
                             sanitized: false,
                             branch: branch_stack.last().copied(),
+                        ..Default::default()
                         },
                     );
                     fn_params.entry(func_id).or_default().push(pid);
@@ -748,6 +755,7 @@ fn build_dfg(
                                 kind: DFNodeKind::Return,
                                 sanitized,
                                 branch: branch_stack.last().copied(),
+                        ..Default::default()
                             });
                         fir.symbols.entry(name.clone()).or_insert_with(|| Symbol {
                             name: name.clone(),
@@ -788,6 +796,7 @@ fn build_dfg(
                             kind: DFNodeKind::Use,
                             sanitized,
                             branch: branch_stack.last().copied(),
+                        ..Default::default()
                         });
                     fir.symbols.entry(name.clone()).or_insert_with(|| Symbol {
                         name: name.clone(),
@@ -814,6 +823,7 @@ fn build_dfg(
                     kind: DFNodeKind::Branch,
                     sanitized: false,
                     branch: branch_stack.last().copied(),
+                        ..Default::default()
                 });
             let before = fir.symbols.clone();
             let mut branch_states: Vec<HashMap<String, Symbol>> = Vec::new();
@@ -921,6 +931,7 @@ fn build_dfg(
                     kind: DFNodeKind::Branch,
                     sanitized: false,
                     branch: branch_stack.last().copied(),
+                        ..Default::default()
                 },
             );
 
@@ -1062,6 +1073,7 @@ fn build_dfg(
                     kind: DFNodeKind::Branch,
                     sanitized: false,
                     branch: branch_stack.last().copied(),
+                        ..Default::default()
                 },
             );
             if let Some(cond) = node.child_by_field_name("condition") {
@@ -1081,6 +1093,7 @@ fn build_dfg(
                             kind: DFNodeKind::Use,
                             sanitized,
                             branch: branch_stack.last().copied(),
+                        ..Default::default()
                         },
                     );
                     fir.symbols.entry(name.clone()).or_insert_with(|| Symbol {
@@ -1151,6 +1164,7 @@ fn build_dfg(
                     kind: DFNodeKind::Branch,
                     sanitized: false,
                     branch: branch_stack.last().copied(),
+                        ..Default::default()
                 },
             );
             if let Some(cond) = node.child_by_field_name("condition") {
@@ -1170,6 +1184,7 @@ fn build_dfg(
                             kind: DFNodeKind::Use,
                             sanitized,
                             branch: branch_stack.last().copied(),
+                        ..Default::default()
                         },
                     );
                     fir.symbols.entry(name.clone()).or_insert_with(|| Symbol {
@@ -1240,6 +1255,7 @@ fn build_dfg(
                     kind: DFNodeKind::Branch,
                     sanitized: false,
                     branch: branch_stack.last().copied(),
+                        ..Default::default()
                 },
             );
             if let Some(val) = node.child_by_field_name("value") {
@@ -1259,6 +1275,7 @@ fn build_dfg(
                             kind: DFNodeKind::Use,
                             sanitized,
                             branch: branch_stack.last().copied(),
+                        ..Default::default()
                         },
                     );
                     fir.symbols.entry(name.clone()).or_insert_with(|| Symbol {
@@ -1312,6 +1329,7 @@ fn build_dfg(
                     kind: DFNodeKind::Branch,
                     sanitized: false,
                     branch: branch_stack.last().copied(),
+                        ..Default::default()
                 },
             );
             if let Some(cond) = node
@@ -1334,6 +1352,7 @@ fn build_dfg(
                             kind: DFNodeKind::Use,
                             sanitized,
                             branch: branch_stack.last().copied(),
+                        ..Default::default()
                         },
                     );
                     fir.symbols.entry(name.clone()).or_insert_with(|| Symbol {
@@ -1425,6 +1444,7 @@ fn build_dfg(
                         kind: DFNodeKind::Use,
                         sanitized: false,
                         branch: branch_stack.last().copied(),
+                        ..Default::default()
                     },
                 );
             }
@@ -1447,6 +1467,7 @@ fn build_dfg(
                         kind: DFNodeKind::Return,
                         sanitized,
                         branch: branch_stack.last().copied(),
+                        ..Default::default()
                     },
                 );
                 fir.symbols.entry(name.clone()).or_insert_with(|| Symbol {
@@ -1510,6 +1531,7 @@ fn build_dfg(
                             kind: DFNodeKind::Use,
                             sanitized,
                             branch: branch_stack.last().copied(),
+                        ..Default::default()
                         },
                     );
                     if let Some(def_id) = find_symbol(&var, &fir.symbols).and_then(|s| s.def) {
@@ -1543,6 +1565,7 @@ fn build_dfg(
                             kind: DFNodeKind::Use,
                             sanitized,
                             branch: branch_stack.last().copied(),
+                        ..Default::default()
                         },
                     );
                     if let Some(def_id) = find_symbol(&var, &fir.symbols).and_then(|s| s.def) {
@@ -1647,6 +1670,7 @@ fn build_dfg(
                                 kind: DFNodeKind::Def,
                                 sanitized: sanitized_value,
                                 branch: branch_stack.last().copied(),
+                        ..Default::default()
                             },
                         );
 
@@ -1690,6 +1714,7 @@ fn build_dfg(
                             kind: DFNodeKind::Use,
                             sanitized,
                             branch: branch_stack.last().copied(),
+                        ..Default::default()
                         },
                     );
                     if let Some(def_id) = find_symbol(&canonical, &fir.symbols).and_then(|s| s.def)
@@ -1723,6 +1748,7 @@ fn build_dfg(
                                 kind: DFNodeKind::Use,
                                 sanitized,
                                 branch: branch_stack.last().copied(),
+                        ..Default::default()
                             },
                         );
                         if let Some(def_id) = find_symbol(&var, &fir.symbols).and_then(|s| s.def) {
