@@ -311,16 +311,39 @@ fn handle_string_regex_segments(seg: &str) -> Vec<PatternSegment> {
     vec![escape_pattern_segment(seg)]
 }
 
+fn count_metavar_occurrences(pattern: &str) -> HashMap<String, usize> {
+    let metav = Regex::new(r"\$[A-Za-z_][A-Za-z0-9_]*").expect("valid metavariable regex");
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    for m in metav.find_iter(pattern) {
+        let var = &pattern[m.start() + 1..m.end()];
+        *counts.entry(var.to_string()).or_insert(0) += 1;
+    }
+    counts
+}
+
 fn build_semgrep_regex(pattern: &str, mv: &HashMap<String, String>) -> String {
     let metav = Regex::new(r"\$[A-Za-z_][A-Za-z0-9_]*").expect("valid metavariable regex");
     let mut segments: Vec<PatternSegment> = Vec::new();
     let mut last = 0;
+    // Track the capture-group number assigned to each metavariable on first occurrence.
+    // Subsequent occurrences emit a backreference (\N) so that `$X == $X` only matches
+    // when both sides are identical (not independent wildcards).
+    // When a metavar appears multiple times, the first capture uses `[^\n]+?` (non-empty)
+    // to prevent the empty-string trivial match that would make the backreference useless.
+    let occ = count_metavar_occurrences(pattern);
+    let mut group_count: usize = 0;
+    let mut metavar_groups: HashMap<String, usize> = HashMap::new();
     for m in metav.find_iter(pattern) {
         segments.extend(handle_string_regex_segments(&pattern[last..m.start()]));
         let var = &pattern[m.start() + 1..m.end()];
-        if let Some(r) = mv.get(var) {
+        if let Some(&group_num) = metavar_groups.get(var) {
+            // Second+ occurrence: backreference to the first capture group for this metavar.
+            segments.push(PatternSegment::regex(format!("\\{group_num}")));
+        } else if let Some(r) = mv.get(var) {
             let anchored = normalize_metavariable_regex(r);
             let trimmed = anchored.trim_start_matches('^').trim_end_matches('$');
+            group_count += 1;
+            metavar_groups.insert(var.to_string(), group_count);
             if is_pure_lookaround(trimmed) {
                 segments.push(PatternSegment::regex(format!("((?:{trimmed})[^\\n]*?)")));
             } else {
@@ -333,7 +356,14 @@ fn build_semgrep_regex(pattern: &str, mv: &HashMap<String, String>) -> String {
             if pattern == exact_var {
                 segments.extend(handle_string_regex_segments(&pattern[m.start()..m.end()]));
             } else {
-                segments.push(PatternSegment::regex("([^\\n]*?)".to_string()));
+                group_count += 1;
+                metavar_groups.insert(var.to_string(), group_count);
+                // Use `[^\n]+?` (one-or-more) for metavars that appear multiple times so that
+                // the capture is non-empty and the backreference is meaningful.
+                // Single-occurrence metavars keep `[^\n]*?` (zero-or-more) to match empty args.
+                let repeats = occ.get(var).copied().unwrap_or(0) > 1;
+                let quantifier = if repeats { "+" } else { "*" };
+                segments.push(PatternSegment::regex(format!("([^\\n]{quantifier}?)")));
             }
         }
         last = m.end();

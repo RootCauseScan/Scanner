@@ -312,6 +312,25 @@ mod tests {
     }
 
     #[test]
+    fn repeated_metavar_uses_backreference() {
+        // `$X == $X` should only match when both sides are identical.
+        let mv = HashMap::new();
+        let re_str = semgrep_to_regex("$X == $X", &mv);
+        let re = fancy_regex::Regex::new(&re_str).expect("valid regex");
+        assert!(re.is_match("foo == foo").unwrap(), "self-comparison must match");
+        assert!(!re.is_match("foo == bar").unwrap(), "different sides must not match");
+    }
+
+    #[test]
+    fn repeated_metavar_neq_uses_backreference() {
+        let mv = HashMap::new();
+        let re_str = semgrep_to_regex("$X != $X", &mv);
+        let re = fancy_regex::Regex::new(&re_str).expect("valid regex");
+        assert!(re.is_match("x != x").unwrap());
+        assert!(!re.is_match("x != y").unwrap());
+    }
+
+    #[test]
     fn loads_semgrep_pattern_regex_rule() {
         let dir = tempdir().unwrap();
         let rule_yaml = r#"rules:
