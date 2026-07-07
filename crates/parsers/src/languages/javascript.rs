@@ -251,7 +251,7 @@ fn walk_ast(
     }
 }
 
-fn push_dfg_node(fir: &mut FileIR, name: String, kind: DFNodeKind) -> usize {
+fn push_dfg_node(fir: &mut FileIR, name: String, kind: DFNodeKind, line: usize) -> usize {
     let dfg = fir.dfg.get_or_insert_with(DataFlowGraph::default);
     let id = dfg.nodes.len();
     dfg.nodes.push(DFNode {
@@ -260,7 +260,8 @@ fn push_dfg_node(fir: &mut FileIR, name: String, kind: DFNodeKind) -> usize {
         kind,
         sanitized: false,
         branch: None,
-                        ..Default::default()
+        line,
+        ..Default::default()
     });
     id
 }
@@ -297,7 +298,22 @@ fn build_dfg(
     src: &str,
     fir: &mut FileIR,
     scopes: &mut Vec<HashMap<String, Symbol>>,
+    fn_ids: &mut HashMap<String, usize>,
+    current_fn_id: Option<usize>,
 ) {
+    let line = node.start_position().row + 1;
+
+    // Register function declarations so calls can reference them
+    if node.kind() == "function_declaration" || node.kind() == "method_definition" {
+        if let Some(name) = node
+            .child_by_field_name("name")
+            .and_then(|c| node_text(c, src))
+        {
+            let fn_node_id = push_dfg_node(fir, name.clone(), DFNodeKind::Def, line);
+            fn_ids.insert(name, fn_node_id);
+        }
+    }
+
     match node.kind() {
         "statement_block" | "class_body" => scopes.push(HashMap::new()),
         _ => {}
@@ -309,7 +325,7 @@ fn build_dfg(
                 .child_by_field_name("name")
                 .and_then(|child| expression_name(child, src))
             {
-                let def_id = push_dfg_node(fir, var.clone(), DFNodeKind::Def);
+                let def_id = push_dfg_node(fir, var.clone(), DFNodeKind::Def, line);
                 mark_symbol_def(scopes, var, def_id);
             }
         }
@@ -318,19 +334,39 @@ fn build_dfg(
                 .child_by_field_name("left")
                 .and_then(|child| expression_name(child, src))
             {
-                let assign_id = push_dfg_node(fir, target.clone(), DFNodeKind::Assign);
+                let assign_id = push_dfg_node(fir, target.clone(), DFNodeKind::Assign, line);
                 if let Some(def_id) = resolve_symbol(scopes, &target).and_then(|symbol| symbol.def)
                 {
                     let dfg = fir.dfg.get_or_insert_with(DataFlowGraph::default);
                     dfg.edges.push((def_id, assign_id));
                 }
+                // Track call_returns: if RHS is a call_expression to a known function
+                if let Some(rhs) = node.child_by_field_name("right") {
+                    if rhs.kind() == "call_expression" {
+                        let callee = rhs
+                            .child_by_field_name("function")
+                            .and_then(|c| expression_name(c, src));
+                        if let Some(callee_fn_id) = callee.as_deref().and_then(|n| fn_ids.get(n).copied()) {
+                            let dfg = fir.dfg.get_or_insert_with(DataFlowGraph::default);
+                            dfg.call_returns.push((assign_id, callee_fn_id));
+                        }
+                    }
+                }
                 mark_symbol_def(scopes, target, assign_id);
             }
         }
         "call_expression" => {
-            let function_name = node
+            let callee_name = node
                 .child_by_field_name("function")
                 .and_then(|child| expression_name(child, src));
+
+            // Record call edge caller→callee
+            if let (Some(caller_id), Some(ref callee)) = (current_fn_id, &callee_name) {
+                if let Some(&callee_fn_id) = fn_ids.get(callee.as_str()) {
+                    let dfg = fir.dfg.get_or_insert_with(DataFlowGraph::default);
+                    dfg.calls.push((caller_id, callee_fn_id));
+                }
+            }
 
             if let Some(args) = node.child_by_field_name("arguments") {
                 let mut cursor = args.walk();
@@ -341,24 +377,88 @@ fn build_dfg(
                     let Some(var) = node_text(arg, src) else {
                         continue;
                     };
-                    let use_id = push_dfg_node(fir, var.clone(), DFNodeKind::Use);
+                    let use_id = push_dfg_node(fir, var.clone(), DFNodeKind::Use, line);
                     if let Some(def_id) = resolve_symbol(scopes, &var).and_then(|symbol| symbol.def)
                     {
                         let dfg = fir.dfg.get_or_insert_with(DataFlowGraph::default);
                         dfg.edges.push((def_id, use_id));
                     }
-                    if function_name.as_deref() == Some("sanitize") {
+                    if callee_name.as_deref() == Some("sanitize") {
                         mark_sanitized(scopes, &var);
                     }
                 }
             }
         }
+        "if_statement" => {
+            // Track which DFG Assign nodes are created in each branch by comparing
+            // node-list lengths before/after each branch. This avoids scope-snapshot
+            // issues caused by statement_block scopes being pushed/popped inside.
+            let idx_before = fir.dfg.as_ref().map_or(0, |d| d.nodes.len());
+
+            if let Some(cons) = node.child_by_field_name("consequence") {
+                build_dfg(cons, src, fir, scopes, fn_ids, current_fn_id);
+            }
+            let idx_after_true = fir.dfg.as_ref().map_or(0, |d| d.nodes.len());
+
+            if let Some(alt) = node.child_by_field_name("alternative") {
+                build_dfg(alt, src, fir, scopes, fn_ids, current_fn_id);
+            }
+            let idx_after_false = fir.dfg.as_ref().map_or(0, |d| d.nodes.len());
+
+            // Collect Assign nodes from each branch, keyed by variable name
+            let collect_assigns = |start: usize, end: usize, dfg: &DataFlowGraph| -> HashMap<String, usize> {
+                dfg.nodes[start..end]
+                    .iter()
+                    .filter(|n| matches!(n.kind, DFNodeKind::Assign))
+                    .map(|n| (n.name.clone(), n.id))
+                    .collect()
+            };
+
+            if let Some(dfg) = fir.dfg.as_ref() {
+                let true_assigns = collect_assigns(idx_before, idx_after_true, dfg);
+                let false_assigns = collect_assigns(idx_after_true, idx_after_false, dfg);
+
+                let mut merges_to_add: Vec<(String, usize, Vec<usize>)> = Vec::new();
+                let all_vars: std::collections::HashSet<String> = true_assigns
+                    .keys()
+                    .chain(false_assigns.keys())
+                    .cloned()
+                    .collect();
+                for var in all_vars {
+                    let mut sources = Vec::new();
+                    if let Some(&id) = true_assigns.get(&var) { sources.push(id); }
+                    if let Some(&id) = false_assigns.get(&var) { sources.push(id); }
+                    if !sources.is_empty() {
+                        merges_to_add.push((var, line, sources));
+                    }
+                }
+                drop(dfg);
+
+                for (var, ln, sources) in merges_to_add {
+                    let merge_id = push_dfg_node(fir, var.clone(), DFNodeKind::Assign, ln);
+                    let dfg = fir.dfg.get_or_insert_with(DataFlowGraph::default);
+                    dfg.merges.push((merge_id, sources));
+                    mark_symbol_def(scopes, var, merge_id);
+                }
+            }
+            return;
+        }
         _ => {}
     }
 
+    // Determine current_fn_id for children
+    let child_fn_id = if node.kind() == "function_declaration" || node.kind() == "method_definition" {
+        node.child_by_field_name("name")
+            .and_then(|c| node_text(c, src))
+            .and_then(|name| fn_ids.get(&name).copied())
+            .or(current_fn_id)
+    } else {
+        current_fn_id
+    };
+
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
-        build_dfg(child, src, fir, scopes);
+        build_dfg(child, src, fir, scopes, fn_ids, child_fn_id);
     }
 
     match node.kind() {
@@ -380,7 +480,8 @@ pub fn parse_javascript(content: &str, fir: &mut FileIR) {
         walk_ir(root, content, fir);
 
         let mut scopes: Vec<HashMap<String, Symbol>> = vec![HashMap::new()];
-        build_dfg(root, content, fir, &mut scopes);
+        let mut fn_ids: HashMap<String, usize> = HashMap::new();
+        build_dfg(root, content, fir, &mut scopes, &mut fn_ids, None);
         fir.symbols = scopes.remove(0);
 
         let mut file_ast = FileAst::new(fir.file_path.clone(), "javascript".into());
@@ -457,5 +558,41 @@ mod tests {
         let dfg = fir.dfg.as_ref().expect("dfg should be generated");
         assert!(dfg.nodes.iter().any(|n| n.name == "data"));
         assert!(!dfg.edges.is_empty());
+    }
+
+    #[test]
+    fn dfg_nodes_have_line_numbers() {
+        let src = "function foo() {\n  let x = 1;\n}\n";
+        let mut fir = FileIR::new("test.js".into(), "javascript".into());
+        parse_javascript(src, &mut fir);
+        let dfg = fir.dfg.as_ref().expect("dfg");
+        assert!(dfg.nodes.iter().any(|n| n.line > 0), "DFNodes should have line numbers");
+    }
+
+    #[test]
+    fn dfg_calls_populated_for_intra_file_calls() {
+        let src = r#"
+function helper() {}
+function main() { helper(); }
+"#;
+        let mut fir = FileIR::new("test.js".into(), "javascript".into());
+        parse_javascript(src, &mut fir);
+        let dfg = fir.dfg.as_ref().expect("dfg");
+        assert!(!dfg.calls.is_empty(), "dfg.calls should record intra-file function calls");
+    }
+
+    #[test]
+    fn dfg_merges_populated_for_if_redefine() {
+        let src = r#"
+function f(cond) {
+  let x = 1;
+  if (cond) { x = 2; } else { x = 3; }
+  return x;
+}
+"#;
+        let mut fir = FileIR::new("test.js".into(), "javascript".into());
+        parse_javascript(src, &mut fir);
+        let dfg = fir.dfg.as_ref().expect("dfg");
+        assert!(!dfg.merges.is_empty(), "dfg.merges should have a merge node for x redefined in both branches");
     }
 }
