@@ -42,7 +42,7 @@ expression: normalize_json_output(sink.output())
     "elapsed_ms": 0,
     "event": {
       "MatchAttempt": {
-        "file": "/workspace/rust-sast/examples/fixtures/python/py.no-exec/bad.py",
+        "file": "/home/user/scanner/examples/fixtures/python/py.no-exec/bad.py",
         "rule_id": "py.no-exec"
       }
     },
@@ -54,7 +54,7 @@ expression: normalize_json_output(sink.output())
     "elapsed_ms": 0,
     "event": {
       "MatchResult": {
-        "file": "/workspace/rust-sast/examples/fixtures/python/py.no-exec/bad.py",
+        "file": "/home/user/scanner/examples/fixtures/python/py.no-exec/bad.py",
         "matched": true,
         "rule_id": "py.no-exec"
       }
