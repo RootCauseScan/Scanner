@@ -38,7 +38,7 @@ pub mod pattern;
 pub mod plugin;
 pub mod regex_ext;
 pub use cache::AnalysisCache;
-pub use cfg::{build_cfg, has_unsanitized_route};
+pub use cfg::{build_cfg, build_file_cfg, has_unsanitized_route};
 pub use debug::{set_debug_sink, DebugEvent, DebugSink};
 pub use dfg::{build_dfg, link_nodes, mark_sanitized};
 pub use function_taint::{
