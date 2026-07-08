@@ -1,7 +1,8 @@
 ---
 source: crates/debugger/tests/ir_exports.rs
+assertion_line: 48
 expression: dfg.to_dot()
 ---
 digraph DFG {
-    12796864018850672258 [label="expr:Param"];
+    9903207435854589922 [label="expr:Param"];
 }

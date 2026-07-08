@@ -74,6 +74,7 @@ fn merge_states(fir: &mut FileIR, states: Vec<HashMap<String, Symbol>>) {
                     kind: DFNodeKind::Assign,
                     sanitized: sanitized_all,
                     branch: None,
+                        ..Default::default()
                 });
                 for d in defs {
                     dfg.edges.push((d, id));
@@ -271,6 +272,7 @@ pub(crate) fn build_dfg(
                                             kind: DFNodeKind::Param,
                                             sanitized: false,
                                             branch: branch_stack.last().copied(),
+                        ..Default::default()
                                         });
                                         fn_params.entry(id).or_default().push(pid);
                                         fir.symbols.insert(
@@ -316,6 +318,7 @@ pub(crate) fn build_dfg(
                 kind: DFNodeKind::Branch,
                 sanitized: false,
                 branch: branch_stack.last().copied(),
+                        ..Default::default()
             });
             let before = fir.symbols.clone();
             let mut branch_states: Vec<HashMap<String, Symbol>> = Vec::new();
@@ -393,6 +396,7 @@ pub(crate) fn build_dfg(
                 kind: DFNodeKind::Branch,
                 sanitized: false,
                 branch: branch_stack.last().copied(),
+                        ..Default::default()
             });
             let before = fir.symbols.clone();
             let mut branch_states: Vec<HashMap<String, Symbol>> = Vec::new();
@@ -480,6 +484,7 @@ pub(crate) fn build_dfg(
                         kind: DFNodeKind::Def,
                         sanitized: false,
                         branch: branch_stack.last().copied(),
+                        ..Default::default()
                     });
                     let alias_of = fir.symbols.get(var).and_then(|s| s.alias_of.clone());
                     fir.symbols.insert(
@@ -527,6 +532,7 @@ pub(crate) fn build_dfg(
                                         kind: DFNodeKind::Def,
                                         sanitized: false,
                                         branch: branch_stack.last().copied(),
+                        ..Default::default()
                                     });
                                     fir.symbols.insert(
                                         var.to_string(),
@@ -703,6 +709,7 @@ pub(crate) fn build_dfg(
                         kind: DFNodeKind::Def,
                         sanitized: false,
                         branch: branch_stack.last().copied(),
+                        ..Default::default()
                     });
                     let alias_of = fir.symbols.get(var).and_then(|s| s.alias_of.clone());
                     fir.symbols.insert(
@@ -743,6 +750,7 @@ pub(crate) fn build_dfg(
                     kind: DFNodeKind::Return,
                     sanitized,
                     branch: branch_stack.last().copied(),
+                        ..Default::default()
                 });
                 fir.symbols.entry(name.clone()).or_insert_with(|| Symbol {
                     name: name.clone(),
@@ -765,6 +773,7 @@ pub(crate) fn build_dfg(
                 kind: DFNodeKind::Branch,
                 sanitized: false,
                 branch: branch_stack.last().copied(),
+                        ..Default::default()
             });
             if let Some(cond) = node.child_by_field_name("condition") {
                 let mut ids = Vec::new();
@@ -780,6 +789,7 @@ pub(crate) fn build_dfg(
                         kind: DFNodeKind::Use,
                         sanitized,
                         branch: branch_stack.last().copied(),
+                        ..Default::default()
                     });
                     fir.symbols.entry(name.clone()).or_insert_with(|| Symbol {
                         name: name.clone(),
@@ -822,6 +832,7 @@ pub(crate) fn build_dfg(
                 kind: DFNodeKind::Branch,
                 sanitized: false,
                 branch: branch_stack.last().copied(),
+                        ..Default::default()
             });
             if let (Some(left), Some(right)) = (
                 node.child_by_field_name("left"),
@@ -836,6 +847,7 @@ pub(crate) fn build_dfg(
                         kind: DFNodeKind::Def,
                         sanitized: false,
                         branch: branch_stack.last().copied(),
+                        ..Default::default()
                     });
                     fir.symbols.insert(
                         var.to_string(),
@@ -940,6 +952,7 @@ pub(crate) fn build_dfg(
                                                 kind: DFNodeKind::Def,
                                                 sanitized: false,
                                                 branch: branch_stack.last().copied(),
+                        ..Default::default()
                                             });
                                             let alias_of = fir
                                                 .symbols
@@ -1006,6 +1019,7 @@ pub(crate) fn build_dfg(
                                                 kind: DFNodeKind::Use,
                                                 sanitized,
                                                 branch: branch_stack.last().copied(),
+                        ..Default::default()
                                             });
                                             if let Some(def_id) =
                                                 fir.symbols.get(&field).and_then(|s| s.def)
@@ -1072,6 +1086,7 @@ pub(crate) fn build_dfg(
                                         kind: DFNodeKind::Use,
                                         sanitized,
                                         branch: branch_stack.last().copied(),
+                        ..Default::default()
                                     });
                                     if let Some(sym) = fir.symbols.get(&canonical) {
                                         if let Some(def_id) = sym.def {

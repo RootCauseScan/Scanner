@@ -38,9 +38,9 @@ pub mod pattern;
 pub mod plugin;
 pub mod regex_ext;
 pub use cache::AnalysisCache;
-pub use cfg::{build_cfg, has_unsanitized_route};
+pub use cfg::{build_cfg, build_file_cfg, has_unsanitized_route};
 pub use debug::{set_debug_sink, DebugEvent, DebugSink};
-pub use dfg::{build_dfg, link_nodes, mark_sanitized};
+pub use dfg::{build_dfg, link_cfg_to_dfg, link_nodes, mark_sanitized};
 pub use function_taint::{
     all_function_taints, get_function_taint, record_function_taints, reset_function_taints,
     FunctionTaint,
@@ -58,6 +58,18 @@ pub use path::{
 
 use crate::debug::emit;
 use cache::rule_cache::{RuleCache, RuleCacheKey};
+
+/// Ensures a FileIR has both a DFG and a CFG, then links them.
+/// Safe to call multiple times (idempotent due to early-return guards in each sub-step).
+pub fn prepare_file(file: &mut ir::FileIR) {
+    if file.dfg.is_none() {
+        let _ = dfg::build_dfg(file);
+    }
+    if file.cfg.is_none() {
+        file.cfg = cfg::build_file_cfg(file);
+    }
+    dfg::link_cfg_to_dfg(file);
+}
 
 // ── Inter-file taint state ────────────────────────────────────────────────────
 // Collects per-file source/sink data during parallel analysis; a sequential
@@ -296,11 +308,14 @@ pub fn find_taint_path(fir: &FileIR, source: &str, sink: &str) -> Option<Vec<usi
         .map(|(name, _)| name)
         .collect();
 
-    // If none of the sink_vars appear as DFG node names, the sink parameter is
-    // a function name rather than a variable — fall back to legacy mode (any
-    // unsanitized Use node is accepted as the sink endpoint).
+    // If none of the sink_vars appear as DFG node names (excluding zero-indegree
+    // Def nodes which represent function declarations, not data destinations),
+    // fall back to legacy mode (any unsanitized Use node is accepted as sink).
     let any_sink_node_exists = !sink_vars.is_empty()
-        && dfg.nodes.iter().any(|n| sink_vars.contains(&n.name));
+        && dfg.nodes.iter().enumerate().any(|(i, n)| {
+            sink_vars.contains(&n.name)
+                && !(matches!(n.kind, ir::DFNodeKind::Def) && indegree[i] == 0)
+        });
 
     // Determine the source node name (strip leading '$' for PHP superglobals).
     let source_key = source.trim_start_matches('$');
@@ -318,15 +333,18 @@ pub fn find_taint_path(fir: &FileIR, source: &str, sink: &str) -> Option<Vec<usi
     });
 
     for (idx, node) in dfg.nodes.iter().enumerate() {
+        // Seed BFS from taint roots. Two strategies:
+        // 1. If the source name maps to a specific DFG node, seed only that.
+        // 2. Fallback: any zero-indegree unsanitized Def or any Param node
+        //    (params are always external input regardless of indegree).
         let is_source_node = if seeded_from_source {
             (node.name == source || node.name == source_key)
                 && matches!(node.kind, ir::DFNodeKind::Def | ir::DFNodeKind::Param)
                 && is_unsanitized(fir, &node.name)
         } else {
-            // Fallback: any zero-indegree unsanitized Def
-            matches!(node.kind, ir::DFNodeKind::Def)
-                && indegree[idx] == 0
-                && is_unsanitized(fir, &node.name)
+            let is_root = matches!(node.kind, ir::DFNodeKind::Def) && indegree[idx] == 0
+                || matches!(node.kind, ir::DFNodeKind::Param);
+            is_root && is_unsanitized(fir, &node.name)
         };
         if is_source_node && !visited[idx] {
             queue.push_back((idx, vec![idx]));
@@ -338,10 +356,12 @@ pub fn find_taint_path(fir: &FileIR, source: &str, sink: &str) -> Option<Vec<usi
         let cur_node = &dfg.nodes[current];
 
         // A path reaches the sink when we find a node whose name appears in the
-        // sink text (or the sink text itself matches).  We accept Def, Use and
-        // Assign nodes as potential sink endpoints.
+        // sink text.  We accept Use and Assign nodes; Def nodes only when they
+        // have incoming edges (zero-indegree Defs are function declarations, not
+        // data destinations).
         let reaches_sink = !sink_vars.is_empty()
             && sink_vars.contains(&cur_node.name)
+            && !(matches!(cur_node.kind, ir::DFNodeKind::Def) && indegree[current] == 0)
             && matches!(
                 cur_node.kind,
                 ir::DFNodeKind::Use | ir::DFNodeKind::Def | ir::DFNodeKind::Assign
@@ -355,11 +375,26 @@ pub fn find_taint_path(fir: &FileIR, source: &str, sink: &str) -> Option<Vec<usi
             && is_unsanitized(fir, &cur_node.name);
 
         if reaches_sink || legacy_sink {
+            // Prune paths that are CFG-unreachable (e.g. sink is dead code after a return).
+            if let Some(cfg) = &fir.cfg {
+                if let (Some(src_idx), Some(sink_idx)) = (path.first(), path.last()) {
+                    let src_block = dfg.nodes[*src_idx].block_id;
+                    let sink_block = dfg.nodes[*sink_idx].block_id;
+                    if let (Some(sb), Some(tb)) = (src_block, sink_block) {
+                        if !cfg.is_reachable(sb, tb) {
+                            continue; // dead path — skip without returning
+                        }
+                    }
+                }
+            }
             return Some(path);
         }
 
         for &next in &adj[current] {
-            if visited[next] || !is_unsanitized(fir, &dfg.nodes[next].name) {
+            if visited[next]
+                || dfg.nodes[next].sanitized
+                || !is_unsanitized(fir, &dfg.nodes[next].name)
+            {
                 continue;
             }
             let mut next_path = path.clone();
