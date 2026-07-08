@@ -1561,9 +1561,17 @@ fn build_dfg(
                         ..Default::default()
                 },
             );
-            if let Some(val) = node.child_by_field_name("value") {
+            // Track iterable's taint and create Use nodes for referenced variables.
+            let iterable_sanitized = if let Some(val) = node.child_by_field_name("value") {
                 let mut ids = Vec::new();
                 gather_ids(val, src, &mut ids);
+                let all_clean = !ids.is_empty()
+                    && ids.iter().all(|name| {
+                        let canonical = resolve_alias(name, &fir.symbols);
+                        find_symbol(&canonical, &fir.symbols)
+                            .map(|s| s.sanitized)
+                            .unwrap_or(false)
+                    });
                 for name in ids {
                     let canonical = resolve_alias(&name, &fir.symbols);
                     let sanitized = find_symbol(&canonical, &fir.symbols)
@@ -1592,6 +1600,38 @@ fn build_dfg(
                     {
                         push_edge(fir, (def_id, uid));
                     }
+                }
+                all_clean
+            } else {
+                false
+            };
+            // Create a Param node for the loop variable, carrying the iterable's taint.
+            if let Some(name_node) = node.child_by_field_name("name") {
+                if let Ok(item_name) = name_node.utf8_text(src.as_bytes()) {
+                    let item_name = item_name.trim().to_string();
+                    let (iid, item_line) =
+                        stable_node_id2(fir, Some(name_node), &format!("for_item:{item_name}"));
+                    push_node(
+                        fir,
+                        DFNode {
+                            id: iid,
+                            name: item_name.clone(),
+                            kind: DFNodeKind::Param,
+                            sanitized: iterable_sanitized,
+                            branch: branch_stack.last().copied(),
+                            line: item_line,
+                            ..Default::default()
+                        },
+                    );
+                    fir.symbols.insert(
+                        item_name.clone(),
+                        Symbol {
+                            name: item_name,
+                            sanitized: iterable_sanitized,
+                            def: Some(iid),
+                            alias_of: None,
+                        },
+                    );
                 }
             }
             let before = fir.symbols.clone();

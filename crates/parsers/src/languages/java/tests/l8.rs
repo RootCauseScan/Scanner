@@ -548,3 +548,62 @@ class T {
     assert!(sym.sanitized, "reassignment to literal should overwrite taint and mark x sanitized");
 }
 
+// -------------------------------------------------------------------
+// Enhanced-for loop variable taint propagation
+// -------------------------------------------------------------------
+
+#[test]
+fn enhanced_for_loop_variable_inherits_taint_from_iterable() {
+    let code = r#"
+class T {
+    void run(String[] items) {
+        items[0] = source();
+        for (String item : items) {
+            sink(item);
+        }
+    }
+}
+"#;
+    let fir = parse_snippet(code);
+    // The loop variable `item` should be created as a symbol (Param/Def)
+    // and should inherit taint from the tainted `items` array.
+    let sym = fir.symbols.get("item").expect("loop variable 'item' must be in symbol table");
+    assert!(!sym.sanitized, "loop variable should be tainted when iterable is tainted");
+}
+
+#[test]
+fn enhanced_for_loop_variable_is_clean_when_iterable_is_clean() {
+    let code = r#"
+class T {
+    void run() {
+        String[] safeItems = {"a", "b", "c"};
+        for (String item : safeItems) {
+            sink(item);
+        }
+    }
+}
+"#;
+    let fir = parse_snippet(code);
+    let sym = fir.symbols.get("item").expect("loop variable 'item' must be in symbol table");
+    assert!(sym.sanitized, "loop variable should be clean when iterable contains only literals");
+}
+
+#[test]
+fn enhanced_for_loop_variable_has_dfg_node() {
+    let code = r#"
+class T {
+    void run(String[] items) {
+        for (String item : items) {
+            sink(item);
+        }
+    }
+}
+"#;
+    let fir = parse_snippet(code);
+    let dfg = fir.dfg.as_ref().expect("dfg");
+    // The loop variable should produce a DFG node (Param)
+    let item_node = dfg.nodes.iter().find(|n| n.name == "item");
+    assert!(item_node.is_some(), "enhanced-for loop variable must produce a DFG Param node");
+    assert!(item_node.unwrap().line > 0, "loop variable DFG node must have line > 0");
+}
+
