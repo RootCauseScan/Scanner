@@ -1,12 +1,11 @@
-use crate::call_utils::parse_call;
 use ir::{AstNode, FileIR};
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::sync::{OnceLock, RwLock, RwLockReadGuard};
+use std::sync::{Arc, OnceLock, RwLock};
 
-/// Graph of function calls.
+/// Graph of function calls (directed: caller → callee).
 #[derive(Debug, Clone, Default)]
 pub struct CallGraph {
-    pub edges: HashMap<String, HashSet<String>>, // directed: caller → callees
+    pub edges: HashMap<String, HashSet<String>>, // directed: caller → callee
 }
 
 impl CallGraph {
@@ -16,12 +15,13 @@ impl CallGraph {
         for f in files {
             let Some(ast) = &f.ast else { continue };
             let src = f.source.as_deref().unwrap_or("");
+            let lines: Vec<&str> = src.lines().collect();
             let mut id_to_name = HashMap::new();
             for n in &ast.nodes {
-                collect_names(n, &mut id_to_name);
+                collect_names(n, &mut id_to_name, None);
             }
             for n in &ast.nodes {
-                walk(n, src, None, &id_to_name, &mut edges);
+                walk(n, &lines, None, &id_to_name, &mut edges);
             }
         }
         Self { edges }
@@ -32,90 +32,156 @@ impl CallGraph {
     }
 }
 
-fn is_function_kind(kind: &str) -> bool {
-    kind.contains("Function") || kind == "MethodDeclaration" || kind == "ConstructorDeclaration"
-}
-
-fn is_call_kind(kind: &str) -> bool {
-    kind == "CallExpression" || kind == "Call" || kind == "MethodInvocation" || kind == "ObjectCreationExpression"
-}
-
-fn collect_names(node: &AstNode, map: &mut HashMap<usize, String>) {
-    if is_function_kind(&node.kind) {
+fn collect_names(node: &AstNode, map: &mut HashMap<usize, String>, class_ctx: Option<&str>) {
+    let mut cur_class = class_ctx;
+    if node.kind == "ClassDeclaration" {
         if let Some(name) = node.value.as_str() {
-            map.insert(node.id, name.to_string());
+            cur_class = Some(name);
+        }
+    }
+    if node.kind.contains("Function") || node.kind == "MethodDeclaration" {
+        if let Some(name) = node.value.as_str() {
+            let qualified = match cur_class {
+                Some(cls) => format!("{cls}.{name}"),
+                None => name.to_string(),
+            };
+            map.insert(node.id, qualified);
         }
     }
     for c in &node.children {
-        collect_names(c, map);
+        collect_names(c, map, cur_class);
     }
 }
 
 fn walk(
     node: &AstNode,
-    src: &str,
+    lines: &[&str],
     current: Option<usize>,
     id_to_name: &HashMap<usize, String>,
     edges: &mut HashMap<String, HashSet<String>>,
 ) {
     let mut cur = current;
-    if is_function_kind(&node.kind) {
+    if node.kind.contains("Function") || node.kind == "MethodDeclaration" {
         cur = Some(node.id);
     }
-    if is_call_kind(&node.kind) {
+    let is_call = node.kind == "CallExpression"
+        || node.kind == "Call"
+        || node.kind == "MethodInvocation";
+    if is_call {
         if let Some(caller_id) = cur {
-            let line = node.meta.line;
-            let code = src.lines().nth(line - 1).unwrap_or("").trim();
-            let call_part = if let Some(eq) = code.find('=') {
-                code[eq + 1..].trim()
+            // Java AST: MethodInvocation nodes store the callee path in `value`.
+            let callee_opt = if node.kind == "MethodInvocation" {
+                node.value.as_str().map(|s| s.to_string())
             } else {
-                code
+                let line = node.meta.line;
+                let code = lines.get(line.saturating_sub(1)).copied().unwrap_or("").trim();
+                let call_part = if let Some(eq) = code.find('=') {
+                    code[eq + 1..].trim()
+                } else {
+                    code
+                };
+                parse_call(call_part).map(|(c, _)| c)
             };
-            // Prefer AstNode.value for callee name; fall back to text parsing
-            let callee_opt = node.value.as_str().map(|s| s.to_string()).or_else(|| {
-                parse_call(call_part).map(|(name, _)| name)
-            });
-            if let (Some(caller), Some(callee)) =
-                (id_to_name.get(&caller_id), callee_opt)
-            {
-                edges.entry(caller.clone()).or_default().insert(callee);
+            if let (Some(callee), Some(caller)) = (callee_opt, id_to_name.get(&caller_id)) {
+                edges
+                    .entry(caller.clone())
+                    .or_default()
+                    .insert(callee);
             }
         }
     }
     for c in &node.children {
-        walk(c, src, cur, id_to_name, edges);
+        walk(c, lines, cur, id_to_name, edges);
     }
 }
 
-static CG: OnceLock<RwLock<CallGraph>> = OnceLock::new();
+pub fn parse_call(code: &str) -> Option<(String, Vec<String>)> {
+    let call = code.trim();
+    let mut open = None;
+    let mut paren = 0usize;
+    let mut angle = 0usize;
+    for (i, ch) in call.char_indices() {
+        match ch {
+            '<' => angle += 1,
+            '>' => angle = angle.saturating_sub(1),
+            '(' if angle == 0 => {
+                if paren == 0 {
+                    open = Some(i);
+                }
+                paren += 1;
+            }
+            ')' if angle == 0 => {
+                paren = paren.saturating_sub(1);
+                if paren == 0 {
+                    let open = open?;
+                    let name = call[..open].trim().to_string();
+                    let args_str = &call[open + 1..i];
+                    let args = split_args(args_str);
+                    return Some((name, args));
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
 
-fn cg_lock() -> &'static RwLock<CallGraph> {
-    CG.get_or_init(|| RwLock::new(CallGraph::default()))
+fn split_args(s: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut start = 0usize;
+    let mut paren = 0usize;
+    let mut angle = 0usize;
+    for (i, ch) in s.char_indices() {
+        match ch {
+            '(' => paren += 1,
+            ')' => paren = paren.saturating_sub(1),
+            '<' => angle += 1,
+            '>' => angle = angle.saturating_sub(1),
+            ',' if paren == 0 && angle == 0 => {
+                out.push(s[start..i].trim().to_string());
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    if start < s.len() {
+        let arg = s[start..].trim();
+        if !arg.is_empty() {
+            out.push(arg.to_string());
+        }
+    }
+    out
+}
+
+static CG: OnceLock<RwLock<Arc<CallGraph>>> = OnceLock::new();
+
+fn cg_lock() -> &'static RwLock<Arc<CallGraph>> {
+    CG.get_or_init(|| RwLock::new(Arc::new(CallGraph::default())))
 }
 
 /// Replace the global call graph.
 pub fn set_call_graph(g: CallGraph) {
     if let Ok(mut cg) = cg_lock().write() {
-        *cg = g;
+        *cg = Arc::new(g);
     }
 }
 
-/// Access the global call graph.
-pub fn get_call_graph() -> RwLockReadGuard<'static, CallGraph> {
-    cg_lock().read().expect("call graph lock poisoned")
+/// Access the global call graph as a cheap Arc clone.
+pub fn get_call_graph() -> Arc<CallGraph> {
+    cg_lock().read().expect("call graph lock poisoned").clone()
 }
 
 /// Tracks taint propagation between functions using the call graph.
 pub struct TaintTracker {
-    graph: CallGraph,
+    graph: Arc<CallGraph>,
     sources: HashSet<String>,
     sinks: HashSet<String>,
 }
 
 impl TaintTracker {
-    pub fn new(graph: &CallGraph) -> Self {
+    pub fn new(graph: Arc<CallGraph>) -> Self {
         Self {
-            graph: graph.clone(),
+            graph,
             sources: HashSet::new(),
             sinks: HashSet::new(),
         }
@@ -129,7 +195,7 @@ impl TaintTracker {
         self.sinks.insert(name.to_string());
     }
 
-    /// Returns true if a sink is reachable from any source.
+    /// Returns true if a sink is reachable from any source via the directed call graph.
     pub fn has_flow(&self) -> bool {
         let mut visited = HashSet::new();
         let mut q: VecDeque<String> = self.sources.iter().cloned().collect();

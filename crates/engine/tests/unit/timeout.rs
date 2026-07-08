@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 fn slow_rule_respects_timeout() {
     let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     reset_canonical_cache();
+    register_slow_rule_delay("slow.rule", Duration::from_millis(100));
 
     let mut file = FileIR::new("/tmp/slow".into(), "txt".into());
     file.source = Some("content".into());
@@ -47,6 +48,7 @@ fn slow_rule_respects_timeout() {
 fn slow_rule_does_not_block_fast_rule() {
     let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     reset_canonical_cache();
+    register_slow_rule_delay("slow.rule", Duration::from_millis(100));
 
     let mut file = FileIR::new("/tmp/mixed".into(), "txt".into());
     file.source = Some("fast\ncontent".into());

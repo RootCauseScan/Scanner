@@ -199,6 +199,8 @@ pub fn parse_go(content: &str, fir: &mut FileIR) {
                                             if let Some(&callee_fn) = callee.as_deref().and_then(|n| fn_ids.get(n)) {
                                                 let dfg = fir.dfg.get_or_insert_with(DataFlowGraph::default);
                                                 dfg.call_returns.push((id, callee_fn));
+                                                // propagate taint: callee's Def → assigned variable
+                                                dfg.edges.push((callee_fn, id));
                                             }
                                         }
                                     }
@@ -291,6 +293,16 @@ pub fn parse_go(content: &str, fir: &mut FileIR) {
                             }
                             if callee_name.as_deref() == Some("sanitize") {
                                 go_sanitize(scopes, &var);
+                                // Also mark the variable's current DFG node as sanitized so the
+                                // BFS can detect it even when the variable is block-scoped and
+                                // therefore absent from fir.symbols.
+                                if let Some(def_id) = go_resolve(scopes, &var).and_then(|s| s.def) {
+                                    if let Some(dfg) = fir.dfg.as_mut() {
+                                        if let Some(n) = dfg.nodes.iter_mut().find(|n| n.id == def_id) {
+                                            n.sanitized = true;
+                                        }
+                                    }
+                                }
                             }
                         }
                     }

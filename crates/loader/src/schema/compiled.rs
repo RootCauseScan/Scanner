@@ -122,8 +122,13 @@ pub(crate) fn normalize_languages(langs: Option<Vec<String>>) -> Vec<String> {
                 continue;
             }
             let lower = trimmed.to_lowercase();
-            if seen.insert(lower.clone()) {
-                normalized.push(lower);
+            let mapped = if lower == "regex" {
+                GENERIC_LANGUAGE.to_string()
+            } else {
+                lower
+            };
+            if seen.insert(mapped.clone()) {
+                normalized.push(mapped);
             }
         }
     }
@@ -192,21 +197,13 @@ pub(crate) fn log_rule_summary(rule: &CompiledRule) {
                 "compiled text regex rule"
             );
         }
-        MatcherKind::TextRegexMulti {
-            allow,
-            deny,
-            inside,
-            not_inside,
-        } => {
+        MatcherKind::TextRegexMulti { subs } => {
             debug!(
                 rule_id = %rule.id,
                 matcher = "text_regex_multi",
                 message = %rule.message,
                 file = ?rule.source_file,
-                allow = allow.len(),
-                deny = deny.is_some(),
-                inside = inside.len(),
-                not_inside = not_inside.len(),
+                subs = subs.len(),
                 "compiled contextual text rule"
             );
         }

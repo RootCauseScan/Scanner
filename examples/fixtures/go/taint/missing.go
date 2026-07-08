@@ -1,13 +1,9 @@
 package main
 
-func other() string {
-	return "safe"
-}
-
-func sink(data string) {
-}
-
+func source() string { return "tainted" }
+func sink(s string)  {}
 func main() {
-	x := other()
-	sink(x)
+	user := source()
+	_ = user
+	sink("safe")
 }

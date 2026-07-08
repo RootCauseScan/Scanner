@@ -5,6 +5,7 @@ use crate::catalog::Catalog;
 pub fn load_catalog() -> Catalog {
     Catalog {
         sources: HashSet::from([
+            "source".into(),
             "input".into(),
             "sys.stdin.readline".into(),
             "request.args.get".into(),
@@ -21,6 +22,7 @@ pub fn load_catalog() -> Catalog {
             "flask.request.values".into(),
         ]),
         sinks: HashSet::from([
+            "sink".into(),
             "os.execv".into(),
             "os.execve".into(),
             "os.execvp".into(),

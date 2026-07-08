@@ -7,7 +7,7 @@ use loader::{
     semgrep_to_regex, semgrep_to_regex_exact, AnyRegex, AstPattern as LoaderAstPattern,
     MetaVar as LoaderMetaVar,
 };
-pub use loader::{CompiledRule, MatcherKind, RuleSet, Severity, TaintPattern};
+pub use loader::{CompiledRule, MatcherKind, RuleSet, Severity, SubMatcher, TaintPattern};
 use parsers::ParserMetrics;
 use rayon::prelude::*;
 use rayon::ThreadPoolBuilder;
@@ -18,6 +18,7 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::thread_local;
 use std::time::{Duration, Instant};
@@ -28,11 +29,10 @@ use tokio::runtime::{Handle, Runtime};
 
 pub mod cache;
 pub mod cfg;
-pub(crate) mod call_utils;
 pub mod dataflow;
 pub mod debug;
 pub mod dfg;
-mod function_taint;
+pub mod function_taint;
 mod hash;
 pub mod pattern;
 pub mod plugin;
@@ -47,14 +47,13 @@ pub use function_taint::{
 };
 mod path;
 use path::cache_stats;
-#[cfg(test)]
 pub use path::{
     canonical_cache_stats, path_regex_cache_contains, path_regex_cache_size, reset_canonical_cache,
     reset_path_regex_cache,
 };
 pub use path::{
-    canonicalize_path, path_matches, CANONICAL_CACHE_CAPACITY, CANONICAL_PATHS,
-    PATH_REGEX_CACHE_CAPACITY,
+    canonicalize_path, path_matches, set_canonical_cache_capacity, set_path_regex_cache_capacity,
+    CANONICAL_CACHE_CAPACITY, CANONICAL_PATHS, PATH_REGEX_CACHE_CAPACITY,
 };
 
 use crate::debug::emit;
@@ -71,6 +70,189 @@ pub fn prepare_file(file: &mut ir::FileIR) {
     }
     dfg::link_cfg_to_dfg(file);
 }
+
+// ── Inter-file taint state ────────────────────────────────────────────────────
+// Collects per-file source/sink data during parallel analysis; a sequential
+// second pass then connects them through the CallGraph.
+
+#[derive(Default)]
+struct InterFileTaintState {
+    /// rule_id → [(enclosing_func_name, file_path)]
+    source_funcs: HashMap<String, Vec<(String, String)>>,
+    /// rule_id → [(enclosing_func_name, file_path, sink_text, line, col, excerpt)]
+    sink_funcs: HashMap<String, Vec<(String, String, String, usize, usize, String)>>,
+}
+
+static INTER_FILE_TAINT: OnceLock<Mutex<InterFileTaintState>> = OnceLock::new();
+
+fn inter_file_state() -> &'static Mutex<InterFileTaintState> {
+    INTER_FILE_TAINT.get_or_init(|| Mutex::new(InterFileTaintState::default()))
+}
+
+fn reset_inter_file_state() {
+    if let Ok(mut s) = inter_file_state().lock() {
+        s.source_funcs.clear();
+        s.sink_funcs.clear();
+    }
+}
+
+/// Returns the qualified name (ClassName.methodName) of the function that
+/// contains `target_line` in the file's AST. Used for inter-file taint.
+fn enclosing_function_name(file: &FileIR, target_line: usize) -> Option<String> {
+    let ast = file.ast.as_ref()?;
+    let mut best: Option<(usize, String)> = None;
+    collect_func_for_line(&ast.nodes, target_line, None, &mut best);
+    best.map(|(_, name)| name)
+}
+
+fn collect_func_for_line(
+    nodes: &[AstNode],
+    target_line: usize,
+    class_ctx: Option<&str>,
+    best: &mut Option<(usize, String)>,
+) {
+    for node in nodes {
+        let cur_class: Option<&str> = if node.kind == "ClassDeclaration" {
+            node.value.as_str().or(class_ctx)
+        } else {
+            class_ctx
+        };
+        if (node.kind.contains("Function") || node.kind == "MethodDeclaration")
+            && node.meta.line <= target_line
+        {
+            if let Some(name) = node.value.as_str() {
+                let qualified = match cur_class {
+                    Some(cls) => format!("{cls}.{name}"),
+                    None => name.to_string(),
+                };
+                let start = node.meta.line;
+                if best.as_ref().map_or(true, |(l, _)| start >= *l) {
+                    *best = Some((start, qualified));
+                }
+            }
+        }
+        collect_func_for_line(&node.children, target_line, cur_class, best);
+    }
+}
+
+fn record_interfile_sources(rule: &CompiledRule, file: &FileIR, source_syms: &[(String, usize, usize)]) {
+    let mut state = match inter_file_state().lock() {
+        Ok(s) => s,
+        Err(e) => e.into_inner(),
+    };
+    let entry = state.source_funcs.entry(rule.id.clone()).or_default();
+    for (_, line, _) in source_syms {
+        if let Some(func) = enclosing_function_name(file, *line) {
+            let key = (func, file.file_path.clone());
+            if !entry.contains(&key) {
+                entry.push(key);
+            }
+        }
+    }
+}
+
+fn record_interfile_sinks(
+    rule: &CompiledRule,
+    file: &FileIR,
+    sink_hits: &[(String, usize, usize, String)],
+) {
+    let mut state = match inter_file_state().lock() {
+        Ok(s) => s,
+        Err(e) => e.into_inner(),
+    };
+    let entry = state.sink_funcs.entry(rule.id.clone()).or_default();
+    for (sink_text, line, col, excerpt) in sink_hits {
+        if let Some(func) = enclosing_function_name(file, *line) {
+            entry.push((
+                func,
+                file.file_path.clone(),
+                sink_text.clone(),
+                *line,
+                *col,
+                excerpt.clone(),
+            ));
+        }
+    }
+}
+
+/// Returns true if `callee` (from the CallGraph, e.g. "service.doThing") could
+/// refer to `sink_func` (class-qualified, e.g. "ServiceClass.doThing").
+/// Matches on the method-name suffix to bridge instance-variable vs class-name prefixes.
+fn callee_matches_sink_func(callee: &str, sink_func: &str) -> bool {
+    if callee == sink_func {
+        return true;
+    }
+    let callee_method = callee.rsplit_once('.').map(|(_, m)| m).unwrap_or(callee);
+    let sink_method = sink_func.rsplit_once('.').map(|(_, m)| m).unwrap_or(sink_func);
+    !callee_method.is_empty()
+        && !sink_method.is_empty()
+        && callee_method == sink_method
+        && callee.contains('.')
+}
+
+fn eval_interfile_taint(rules: &RuleSet) -> Vec<Finding> {
+    let state = match inter_file_state().lock() {
+        Ok(s) => s,
+        Err(e) => e.into_inner(),
+    };
+    let call_graph = dataflow::get_call_graph();
+    let mut findings: Vec<Finding> = Vec::new();
+    let mut seen_ids: HashSet<String> = HashSet::new();
+
+    for rule in &rules.rules {
+        if !matches!(rule.matcher, MatcherKind::TaintRule { .. }) {
+            continue;
+        }
+        let source_funcs = match state.source_funcs.get(&rule.id) {
+            Some(v) => v,
+            None => continue,
+        };
+        let sink_funcs = match state.sink_funcs.get(&rule.id) {
+            Some(v) => v,
+            None => continue,
+        };
+
+        for (src_func, src_file) in source_funcs {
+            let Some(callees) = call_graph.edges.get(src_func) else {
+                continue;
+            };
+            for (sink_func, sink_file, _sink_text, line, col, excerpt) in sink_funcs {
+                if src_file == sink_file {
+                    continue; // per-file analysis already handled this
+                }
+                let connected = callees
+                    .iter()
+                    .any(|callee| callee_matches_sink_func(callee, sink_func));
+                if !connected {
+                    continue;
+                }
+                let id = blake3::hash(
+                    format!("{}:{}:{}:{}", rule.id, sink_file, line, col).as_bytes(),
+                )
+                .to_hex()
+                .to_string();
+                if seen_ids.insert(id.clone()) {
+                    findings.push(Finding {
+                        id,
+                        rule_id: rule.id.clone(),
+                        rule_file: rule.source_file.clone(),
+                        severity: rule.severity,
+                        file: PathBuf::from(sink_file),
+                        line: *line,
+                        column: *col,
+                        excerpt: excerpt.clone(),
+                        message: rule.message.clone(),
+                        remediation: rule.remediation.clone(),
+                        fix: rule.fix.clone(),
+                    });
+                }
+            }
+        }
+    }
+    findings
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 pub fn parse_file_with_events(
     path: &Path,
@@ -99,7 +281,7 @@ pub fn load_rules_with_events(path: &Path) -> anyhow::Result<RuleSet> {
 /// Performs a BFS over the edges of the `DataFlowGraph`, ignoring symbols
 /// marked as sanitized. Returns the sequence of nodes from source
 /// to sink if it exists.
-pub fn find_taint_path(fir: &FileIR, _source: &str, _sink: &str) -> Option<Vec<usize>> {
+pub fn find_taint_path(fir: &FileIR, source: &str, sink: &str) -> Option<Vec<usize>> {
     let dfg = fir.dfg.as_ref()?;
 
     fn is_unsanitized(fir: &FileIR, name: &str) -> bool {
@@ -119,17 +301,52 @@ pub fn find_taint_path(fir: &FileIR, _source: &str, _sink: &str) -> Option<Vec<u
         }
     }
 
+    // Collect the names of variables referenced in the sink text so we can
+    // identify DFG nodes that represent the sink end of the path.
+    let sink_vars: HashSet<String> = extract_sink_variables(sink)
+        .into_iter()
+        .map(|(name, _)| name)
+        .collect();
+
+    // If none of the sink_vars appear as DFG node names (excluding zero-indegree
+    // Def nodes which represent function declarations, not data destinations),
+    // fall back to legacy mode (any unsanitized Use node is accepted as sink).
+    let any_sink_node_exists = !sink_vars.is_empty()
+        && dfg.nodes.iter().enumerate().any(|(i, n)| {
+            sink_vars.contains(&n.name)
+                && !(matches!(n.kind, ir::DFNodeKind::Def) && indegree[i] == 0)
+        });
+
+    // Determine the source node name (strip leading '$' for PHP superglobals).
+    let source_key = source.trim_start_matches('$');
+
     let mut queue: VecDeque<(usize, Vec<usize>)> = VecDeque::new();
     let mut visited = vec![false; dfg.nodes.len()];
 
+    // Seed BFS from every Def/Param node whose name matches the source variable.
+    // Fall back to all zero-indegree unsanitized Def nodes when the source name
+    // is empty or not found in the DFG (preserves existing behaviour for callers
+    // that pass an empty source string).
+    let seeded_from_source = dfg.nodes.iter().enumerate().any(|(_, n)| {
+        (n.name == source || n.name == source_key)
+            && matches!(n.kind, ir::DFNodeKind::Def | ir::DFNodeKind::Param)
+    });
+
     for (idx, node) in dfg.nodes.iter().enumerate() {
-        // Seed BFS from two kinds of taint roots:
-        // 1. Def nodes with no incoming edges (results of unknown/source calls).
-        // 2. Param nodes — method parameters are always external input regardless
-        //    of their indegree (which is always 0 as nothing flows INTO a param).
-        let is_root = matches!(node.kind, ir::DFNodeKind::Def) && indegree[idx] == 0
-            || matches!(node.kind, ir::DFNodeKind::Param);
-        if is_root && is_unsanitized(fir, &node.name) {
+        // Seed BFS from taint roots. Two strategies:
+        // 1. If the source name maps to a specific DFG node, seed only that.
+        // 2. Fallback: any zero-indegree unsanitized Def or any Param node
+        //    (params are always external input regardless of indegree).
+        let is_source_node = if seeded_from_source {
+            (node.name == source || node.name == source_key)
+                && matches!(node.kind, ir::DFNodeKind::Def | ir::DFNodeKind::Param)
+                && is_unsanitized(fir, &node.name)
+        } else {
+            let is_root = matches!(node.kind, ir::DFNodeKind::Def) && indegree[idx] == 0
+                || matches!(node.kind, ir::DFNodeKind::Param);
+            is_root && is_unsanitized(fir, &node.name)
+        };
+        if is_source_node && !visited[idx] {
             queue.push_back((idx, vec![idx]));
             visited[idx] = true;
         }
@@ -137,7 +354,27 @@ pub fn find_taint_path(fir: &FileIR, _source: &str, _sink: &str) -> Option<Vec<u
 
     while let Some((current, path)) = queue.pop_front() {
         let cur_node = &dfg.nodes[current];
-        if matches!(cur_node.kind, ir::DFNodeKind::Use) && is_unsanitized(fir, &cur_node.name) {
+
+        // A path reaches the sink when we find a node whose name appears in the
+        // sink text.  We accept Use and Assign nodes; Def nodes only when they
+        // have incoming edges (zero-indegree Defs are function declarations, not
+        // data destinations).
+        let reaches_sink = !sink_vars.is_empty()
+            && sink_vars.contains(&cur_node.name)
+            && !(matches!(cur_node.kind, ir::DFNodeKind::Def) && indegree[current] == 0)
+            && matches!(
+                cur_node.kind,
+                ir::DFNodeKind::Use | ir::DFNodeKind::Def | ir::DFNodeKind::Assign
+            );
+
+        // Also accept the legacy condition (any unsanitized Use) when we have no
+        // sink variable information, or when the sink name doesn't correspond to
+        // any variable in the DFG (i.e. it's a function name like "sink").
+        let legacy_sink = !any_sink_node_exists
+            && matches!(cur_node.kind, ir::DFNodeKind::Use)
+            && is_unsanitized(fir, &cur_node.name);
+
+        if reaches_sink || legacy_sink {
             // Prune paths that are CFG-unreachable (e.g. sink is dead code after a return).
             if let Some(cfg) = &fir.cfg {
                 if let (Some(src_idx), Some(sink_idx)) = (path.first(), path.last()) {
@@ -154,7 +391,10 @@ pub fn find_taint_path(fir: &FileIR, _source: &str, _sink: &str) -> Option<Vec<u
         }
 
         for &next in &adj[current] {
-            if visited[next] || !is_unsanitized(fir, &dfg.nodes[next].name) {
+            if visited[next]
+                || dfg.nodes[next].sanitized
+                || !is_unsanitized(fir, &dfg.nodes[next].name)
+            {
                 continue;
             }
             let mut next_path = path.clone();
@@ -237,7 +477,7 @@ thread_local! {
 }
 
 /// Pre-loads WASM instances for Rego rules and avoids repeated initialisations.
-fn warmup_wasm_rules(rules: &RuleSet) {
+pub fn warmup_wasm_rules(rules: &RuleSet) {
     init_tokio();
     let handle = Handle::try_current().unwrap_or_else(|_| tokio_handle());
     for rule in &rules.rules {
@@ -435,11 +675,23 @@ fn dedup_findings(findings: &mut Vec<Finding>) {
 }
 
 static RULE_CACHE: OnceLock<RuleCache> = OnceLock::new();
+static RULE_CACHE_RUNTIME_CAPACITY: AtomicUsize = AtomicUsize::new(1024);
+static SLOW_RULE_DELAYS: OnceLock<Mutex<HashMap<String, Duration>>> = OnceLock::new();
 
-#[cfg(test)]
-pub(crate) const RULE_CACHE_CAPACITY: usize = 3;
-#[cfg(not(test))]
-pub(crate) const RULE_CACHE_CAPACITY: usize = 1024;
+pub const RULE_CACHE_CAPACITY: usize = 1024;
+
+pub fn set_rule_cache_capacity(n: usize) {
+    RULE_CACHE_RUNTIME_CAPACITY.store(n, Ordering::Relaxed);
+    reset_rule_cache();
+}
+
+pub fn register_slow_rule_delay(rule_id: &str, delay: Duration) {
+    let registry = SLOW_RULE_DELAYS.get_or_init(|| Mutex::new(HashMap::new()));
+    registry
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(rule_id.to_string(), delay);
+}
 
 fn rule_cache_stats_inner() -> (usize, usize) {
     rule_cache().stats()
@@ -451,12 +703,11 @@ pub fn reset_rule_cache() {
     }
 }
 
-#[cfg(test)]
 pub fn rule_cache_stats() -> (usize, usize) {
     rule_cache_stats_inner()
 }
 
-fn eval_rule(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
+pub fn eval_rule(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
     debug!(
         "eval_rule: Starting evaluation of rule '{}' for file '{}'",
         rule.id, file.file_path
@@ -464,9 +715,11 @@ fn eval_rule(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
     let key = RuleCacheKey {
         file: PathBuf::from(&file.file_path),
         rule_id: rule.id.clone(),
+        content_hash: cache::hash_file(file),
     };
 
-    let (result, hit) = rule_cache().get_or_insert(key, RULE_CACHE_CAPACITY, || {
+    let cap = RULE_CACHE_RUNTIME_CAPACITY.load(Ordering::Relaxed);
+    let (result, hit) = rule_cache().get_or_insert(key, cap, || {
         debug!(
             "eval_rule: Calling eval_rule_impl for rule '{}' and file '{}'",
             rule.id, file.file_path
@@ -565,7 +818,7 @@ fn derive_assignment_lhs(source: &str, pos: usize) -> Option<String> {
     let pos = floor_char_boundary(source, pos);
     let line_start = source[..pos].rfind('\n').map(|idx| idx + 1).unwrap_or(0);
     let prefix = &source[line_start..pos];
-    if prefix.trim().is_empty() {
+    if prefix.is_empty() {
         return None;
     }
     let re = ASSIGN_LHS_RE.get_or_init(|| {
@@ -578,12 +831,25 @@ fn derive_assignment_lhs(source: &str, pos: usize) -> Option<String> {
         .and_then(|caps| caps.name("name").map(|m| m.as_str().to_string()))
 }
 
+// Common Java/C/JS keywords that should not be treated as variable names.
+const LANG_KEYWORDS: &[&str] = &[
+    "abstract", "assert", "boolean", "break", "byte", "case", "catch", "char", "class",
+    "const", "continue", "default", "do", "double", "else", "enum", "extends", "final",
+    "finally", "float", "for", "goto", "if", "implements", "import", "instanceof", "int",
+    "interface", "long", "native", "new", "package", "private", "protected", "public",
+    "return", "short", "static", "strictfp", "super", "switch", "synchronized", "this",
+    "throw", "throws", "transient", "try", "void", "volatile", "while", "true", "false",
+    "null", "String", "Object", "var", "let", "const", "function", "typeof", "instanceof",
+    "in", "of", "async", "await", "yield",
+];
+
 fn extract_sink_variables(text: &str) -> Vec<(String, usize)> {
     let mut vars = Vec::new();
     let mut iter = text.char_indices().peekable();
 
     while let Some((idx, ch)) = iter.next() {
         if ch == '$' {
+            // PHP-style variable: $varName
             let mut var_name = String::new();
             while let Some(&(_, next_ch)) = iter.peek() {
                 if next_ch.is_ascii_alphanumeric() || next_ch == '_' {
@@ -594,6 +860,20 @@ fn extract_sink_variables(text: &str) -> Vec<(String, usize)> {
                 }
             }
             if !var_name.is_empty() {
+                vars.push((var_name, idx));
+            }
+        } else if ch.is_ascii_alphabetic() || ch == '_' {
+            // Java/Python/JS identifier: starts with letter or underscore
+            let mut var_name = ch.to_string();
+            while let Some(&(_, next_ch)) = iter.peek() {
+                if next_ch.is_ascii_alphanumeric() || next_ch == '_' {
+                    var_name.push(next_ch);
+                    iter.next();
+                } else {
+                    break;
+                }
+            }
+            if var_name.len() > 1 && !LANG_KEYWORDS.contains(&var_name.as_str()) {
                 vars.push((var_name, idx));
             }
         }
@@ -789,11 +1069,14 @@ struct FileToAnalyze<'a> {
 struct FileAnalysisResult {
     hash: Option<String>,
     findings: Vec<Finding>,
+    metrics: Option<EngineMetrics>,
 }
 
 fn analyze_files_inner(
     files: &[FileToAnalyze<'_>],
     rule_index: &ApplicableRuleIndex<'_>,
+    cfg: &EngineConfig,
+    collect_metrics: bool,
     progress: Option<&Arc<dyn Fn(usize) + Send + Sync + 'static>>,
 ) -> Vec<FileAnalysisResult> {
     debug!(
@@ -805,7 +1088,17 @@ fn analyze_files_inner(
         .map(|item| {
             let display_id = item.hash.as_deref().unwrap_or(&item.file.file_path);
             debug!("analyze_files_inner: Processing file '{}'", display_id);
-            let findings = analyze_file_inner(item.file, rule_index);
+            let mut per_file_metrics = if collect_metrics {
+                Some(EngineMetrics::default())
+            } else {
+                None
+            };
+            let findings = analyze_file_with_config_inner(
+                item.file,
+                rule_index,
+                cfg,
+                per_file_metrics.as_mut(),
+            );
             debug!(
                 "analyze_files_inner: Completed processing file '{}', found {} findings",
                 display_id,
@@ -817,6 +1110,7 @@ fn analyze_files_inner(
             FileAnalysisResult {
                 hash: item.hash.clone(),
                 findings,
+                metrics: per_file_metrics,
             }
         })
         .collect();
@@ -889,6 +1183,8 @@ pub fn analyze_files_with_config(
     mut metrics: Option<&mut EngineMetrics>,
     progress: Option<&Arc<dyn Fn(usize) + Send + Sync + 'static>>,
 ) -> Vec<Finding> {
+    reset_function_taints();
+    reset_inter_file_state();
     configure_call_graph(files, rules);
     warmup_wasm_rules(rules);
     let rule_index = ApplicableRuleIndex::new(rules);
@@ -928,49 +1224,33 @@ pub fn analyze_files_with_config(
         }
     }
 
-    let mut findings =
-        if cfg.file_timeout.is_none() && cfg.rule_timeout.is_none() && metrics.is_none() {
-            analyze_files_inner(&to_analyze, &rule_index, progress)
-                .into_iter()
-                .flat_map(|result| {
-                    if let Some(hash) = result.hash.as_ref() {
-                        if let Some(rules_hash) = rules_hash.as_deref() {
-                            if let Some(c) = cache.as_deref_mut() {
-                                c.insert(hash.clone(), result.findings.clone(), rules_hash);
-                            }
-                        }
-                    }
-                    result.findings.into_iter()
-                })
-                .collect()
-        } else {
-            let mut out = Vec::new();
-            for (idx, item) in to_analyze.into_iter().enumerate() {
-                let f = item.file;
-                let hash = item.hash;
-                debug!(
-                    "Config analysis: processing file {}/{}: {}",
-                    idx + 1,
-                    files.len(),
-                    f.file_path
-                );
-                let mut res =
-                    analyze_file_with_config_inner(f, &rule_index, cfg, metrics.as_deref_mut());
-                if let Some(rules_hash) = rules_hash.as_deref() {
-                    if let Some(c) = cache.as_deref_mut() {
-                        if let Some(hash_value) = hash.as_ref() {
-                            c.insert(hash_value.clone(), res.clone(), rules_hash);
-                        }
-                    }
+    let collect_metrics = metrics.is_some();
+    let parallel_results =
+        analyze_files_inner(&to_analyze, &rule_index, cfg, collect_metrics, progress);
+
+    let mut findings: Vec<Finding> = Vec::new();
+    for result in parallel_results {
+        if let Some(hash) = result.hash.as_ref() {
+            if let Some(rules_hash) = rules_hash.as_deref() {
+                if let Some(c) = cache.as_deref_mut() {
+                    c.insert(hash.clone(), result.findings.clone(), rules_hash);
                 }
-                if let Some(cb) = progress {
-                    cb(1);
-                }
-                out.append(&mut res);
             }
-            out
-        };
+        }
+        if let (Some(m), Some(per_file)) = (metrics.as_deref_mut(), result.metrics) {
+            for (k, v) in per_file.file_times_ms {
+                m.file_times_ms.insert(k, v);
+            }
+            for (k, v) in per_file.rule_times_ms {
+                *m.rule_times_ms.entry(k).or_insert(0) += v;
+            }
+        }
+        findings.extend(result.findings);
+    }
     findings.extend(cached);
+
+    // Inter-file taint: connect sources in one file to sinks in a callee file.
+    findings.extend(eval_interfile_taint(rules));
 
     // Apply baseline filtering
     if let Some(baseline) = &cfg.baseline {
@@ -1016,6 +1296,7 @@ pub fn analyze_files_streaming<I>(
 where
     I: IntoIterator<Item = FileIR>,
 {
+    function_taint::reset_function_taints();
     let needs_call_graph = rules_require_call_graph(rules);
     if !needs_call_graph {
         dataflow::set_call_graph(dataflow::CallGraph::default());
@@ -1035,29 +1316,82 @@ where
         "Starting streaming analysis with {} rules",
         rules.rules.len()
     );
-    let mut count = 0usize;
-    for f in files.into_iter() {
-        count += 1;
-        debug!(
-            "Streaming analysis: processing file {}: {}",
-            count, f.file_path
-        );
-        if needs_call_graph {
-            dataflow::set_call_graph(dataflow::CallGraph::build(std::slice::from_ref(&f)));
-        }
-        let mut hash = None;
+    // When a call graph is needed, collect all files first so the graph spans
+    // the entire corpus rather than being rebuilt per-file.
+    let mut all_files: Vec<FileIR> = files.into_iter().collect();
+    // Link inter-file Java imports so cross-class taint flows are resolved.
+    parsers::languages::java::link_java_files(&mut all_files);
+    if needs_call_graph {
+        dataflow::set_call_graph(dataflow::CallGraph::build(&all_files));
+    }
+
+    // Pre-pass: drain cache hits sequentially (cache is &mut, not shareable).
+    let mut to_analyze: Vec<(FileIR, Option<String>)> = Vec::with_capacity(all_files.len());
+    for f in all_files {
         if let Some(cache_ref) = cache.as_ref() {
             let computed = cache::hash_file(&f);
-            if let Some(cached_findings) = cache_ref.get(&computed) {
-                findings.extend(cached_findings.clone());
+            if let Some(cached) = cache_ref.get(&computed) {
+                findings.extend(cached.clone());
+                if let Some(cb) = progress {
+                    cb(1);
+                }
                 continue;
             }
-            hash = Some(computed);
+            to_analyze.push((f, Some(computed)));
+        } else {
+            to_analyze.push((f, None));
         }
-        let mut res = analyze_file_with_config_inner(&f, &rule_index, cfg, metrics.as_deref_mut());
-        if cfg.suppress_comment.is_some() {
-            res.retain(|fi| !f.suppressed.contains(&fi.line));
+    }
+    let to_analyze_count = to_analyze.len();
+    let cache_hit_count = findings.len();
+    debug!(
+        "Streaming analysis: {} files to analyze ({} served from cache)",
+        to_analyze_count, cache_hit_count
+    );
+
+    // Analysis phase: parallel when no per-file metrics tracking is needed.
+    // Each file's analysis is independent once the call graph and symbol table
+    // are built, so rayon par_iter gives ~N-CPU speedup with no correctness risk.
+    // The inner rule-timeout pool (RAYON_POOL) is separate from the global pool
+    // used by par_iter, so there is no deadlock.
+    let analyzed: Vec<(Option<String>, Vec<Finding>)> = if metrics.is_none() {
+        to_analyze
+            .par_iter()
+            .map(|(f, hash)| {
+                let mut res = analyze_file_with_config_inner(f, &rule_index, cfg, None);
+                if cfg.suppress_comment.is_some() {
+                    res.retain(|fi| !f.suppressed.contains(&fi.line));
+                }
+                if let Some(cb) = progress {
+                    cb(1);
+                }
+                (hash.clone(), res)
+            })
+            .collect()
+    } else {
+        // Sequential path: preserves per-file and per-rule timing in metrics.
+        let mut results = Vec::with_capacity(to_analyze.len());
+        for (idx, (f, hash)) in to_analyze.into_iter().enumerate() {
+            debug!(
+                "Streaming analysis: processing file {}: {}",
+                idx + 1,
+                f.file_path
+            );
+            let mut res =
+                analyze_file_with_config_inner(&f, &rule_index, cfg, metrics.as_deref_mut());
+            if cfg.suppress_comment.is_some() {
+                res.retain(|fi| !f.suppressed.contains(&fi.line));
+            }
+            if let Some(cb) = progress {
+                cb(1);
+            }
+            results.push((hash, res));
         }
+        results
+    };
+
+    // Post-pass: cache inserts (sequential) and collect all findings.
+    for (hash, res) in analyzed {
         if let Some(rules_hash) = rules_hash.as_deref() {
             if let Some(c) = cache.as_deref_mut() {
                 if let Some(hash_value) = hash.as_ref() {
@@ -1066,11 +1400,11 @@ where
             }
         }
         findings.extend(res);
-        if let Some(cb) = progress {
-            cb(1);
-        }
     }
-    debug!("Streaming analysis completed for {} files", count);
+    debug!(
+        "Streaming analysis completed for {} files",
+        to_analyze_count + cache_hit_count
+    );
     if let Some(baseline) = &cfg.baseline {
         findings.retain(|f| !baseline.contains(&BaselineEntry::from(f)));
     }
@@ -1233,43 +1567,62 @@ fn eval_rule_impl(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
         rule_id: rule.id.clone(),
         file: PathBuf::from(&file.file_path),
     });
-    #[cfg(test)]
-    if rule.id == "slow.rule" {
-        std::thread::sleep(Duration::from_millis(100));
+    if let Some(delay) = SLOW_RULE_DELAYS
+        .get()
+        .and_then(|r| r.lock().unwrap_or_else(|e| e.into_inner()).get(&rule.id).copied())
+    {
+        std::thread::sleep(delay);
     }
     let canonical_path = canonicalize_path(&file.file_path);
     let canonical = canonical_path.to_string_lossy();
     let findings = match &rule.matcher {
         MatcherKind::TextRegex(re, orig) => {
             debug!(rule=%rule.id, file=%file.file_path, kind="TextRegex", fancy=re.is_fancy(), pat=%orig.chars().take(120).collect::<String>());
-            let source = file.source.as_deref().unwrap_or("");
-            let mut findings: Vec<Finding> = source
-                .lines()
-                .enumerate()
-                .filter_map(|(idx, line)| {
-                    if re.is_match(line) {
-                        let line_num = idx + 1;
-                        let id = blake3::hash(
-                            format!("{}:{}:{}:{}", rule.id, canonical, line_num, 1).as_bytes(),
-                        )
-                        .to_hex()
-                        .to_string();
-                        Some(Finding {
-                            id,
-                            rule_id: rule.id.clone(),
-                            rule_file: rule.source_file.clone(),
-                            severity: rule.severity,
-                            file: PathBuf::from(&file.file_path),
-                            line: line_num,
-                            column: 1,
-                            excerpt: line.to_string(),
-                            message: rule.message.clone(),
-                            remediation: rule.remediation.clone(),
-                            fix: rule.fix.clone(),
-                        })
-                    } else {
-                        None
+            let source_owned = if file.source.is_none() && !file.nodes.is_empty() {
+                serde_json::to_string(&file.nodes).ok()
+            } else {
+                None
+            };
+            let source = file.source.as_deref().or(source_owned.as_deref()).unwrap_or("");
+            let mut seen_lines: HashSet<usize> = HashSet::new();
+            let mut findings: Vec<Finding> = re
+                .find_iter(source)
+                .filter_map(|(ms, _me)| {
+                    let mut line_num = 1usize;
+                    let mut line_start = 0usize;
+                    for (idx, ch) in source[..ms].char_indices() {
+                        if ch == '\n' {
+                            line_num += 1;
+                            line_start = idx + 1;
+                        }
                     }
+                    if !seen_lines.insert(line_num) {
+                        return None;
+                    }
+                    let column = source[line_start..ms].chars().count() + 1;
+                    let line_end = source[ms..]
+                        .find('\n')
+                        .map(|i| ms + i)
+                        .unwrap_or(source.len());
+                    let excerpt = source[line_start..line_end].to_string();
+                    let id = blake3::hash(
+                        format!("{}:{}:{}:{}", rule.id, canonical, line_num, column).as_bytes(),
+                    )
+                    .to_hex()
+                    .to_string();
+                    Some(Finding {
+                        id,
+                        rule_id: rule.id.clone(),
+                        rule_file: rule.source_file.clone(),
+                        severity: rule.severity,
+                        file: PathBuf::from(&file.file_path),
+                        line: line_num,
+                        column,
+                        excerpt,
+                        message: rule.message.clone(),
+                        remediation: rule.remediation.clone(),
+                        fix: rule.fix.clone(),
+                    })
                 })
                 .collect();
 
@@ -1317,21 +1670,23 @@ fn eval_rule_impl(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
 
             findings
         }
-        MatcherKind::TextRegexMulti {
-            allow,
-            deny,
-            inside,
-            not_inside,
-        } => {
-            debug!(rule=%rule.id, file=%file.file_path, kind="TextRegexMulti", allow=allow.len(), deny=deny.is_some(), inside=inside.len(), not_inside=not_inside.len());
+        MatcherKind::TextRegexMulti { subs } => {
+            debug!(rule=%rule.id, file=%file.file_path, kind="TextRegexMulti", subs=subs.len());
             let source = file.source.as_deref().unwrap_or("");
             let mut findings = Vec::new();
+            let aliases = use_aliases(file);
+            for sub in subs {
+            let allow = &sub.allow;
+            let deny = sub.deny.as_ref();
+            let inside = &sub.inside;
+            let not_inside = &sub.not_inside;
             let inside_ranges = regex_ranges_any(source, inside);
             let not_inside_ranges = regex_ranges_any(source, not_inside);
             if !inside.is_empty() && inside_ranges.is_empty() {
-                return findings;
+                // This sub requires a context (pattern-inside) not present in
+                // this file. Skip this sub and try sibling subs.
+                continue;
             }
-            let aliases = use_aliases(file);
             for (idx, (re, orig)) in allow.iter().enumerate() {
                 if re.is_fancy() {
                     debug!(
@@ -1605,6 +1960,7 @@ fn eval_rule_impl(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
                     }
                 }
             }
+            } // end for sub in subs
             findings
         }
         MatcherKind::JsonPathEq(path, val) => {
@@ -1634,6 +1990,15 @@ fn eval_rule_impl(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
                         .as_ref()
                         .and_then(|s| s.lines().nth(m.line - 1).map(|l| l.to_string()))
                         .unwrap_or_default();
+                    let message = if m.metavars.is_empty() {
+                        rule.message.clone()
+                    } else {
+                        let mut msg = rule.message.clone();
+                        for (k, v) in &m.metavars {
+                            msg = msg.replace(&format!("${k}"), v);
+                        }
+                        msg
+                    };
                     Finding {
                         id: blake3::hash(
                             format!("{}:{}:{}:{}", rule.id, canonical, m.line, m.column).as_bytes(),
@@ -1647,7 +2012,7 @@ fn eval_rule_impl(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
                         line: m.line,
                         column: m.column,
                         excerpt,
-                        message: rule.message.clone(),
+                        message,
                         remediation: rule.remediation.clone(),
                         fix: rule.fix.clone(),
                     }
@@ -1672,7 +2037,7 @@ fn eval_rule_impl(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
             let source_text = file.source.as_deref().unwrap_or("");
             let tracker = if !rule.sources.is_empty() && !rule.sinks.is_empty() {
                 let graph = dataflow::get_call_graph();
-                let mut t = dataflow::TaintTracker::new(&graph);
+                let mut t = dataflow::TaintTracker::new(graph);
                 for s in &rule.sources {
                     t.mark_source(s);
                 }
@@ -2138,6 +2503,11 @@ fn eval_rule_impl(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
                 "TaintRule: collected source symbols"
             );
 
+            // Record for the inter-file taint second pass.
+            if !source_syms.is_empty() {
+                record_interfile_sources(rule, file, &source_syms);
+            }
+
             debug!(
                 "TaintRule: Starting reclass processing for rule '{}' and file '{}'",
                 rule.id, file.file_path
@@ -2372,7 +2742,7 @@ fn eval_rule_impl(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
                                         line_start = idx + 1;
                                     }
                                 }
-                                let column = ms - line_start + 1;
+                                let column = source_text[line_start..ms].chars().count() + 1;
                                 let line_end = source_text[me..]
                                     .find('\n')
                                     .map(|i| me + i)
@@ -2441,6 +2811,11 @@ fn eval_rule_impl(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
                     }
                 }
             }
+            // Record for the inter-file taint second pass.
+            if !sink_hits.is_empty() {
+                record_interfile_sinks(rule, file, &sink_hits);
+            }
+
             let has_flow = tracker.as_ref().map(|t| t.has_flow()).unwrap_or(true);
             let collect_sink_vars = |sink_text: &str, excerpt: &str, column: usize| {
                 let mut vars: Vec<String> = extract_sink_variables(sink_text)
@@ -2538,16 +2913,16 @@ fn eval_rule_impl(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
                     }
 
                     if has_path {
-                        let id = blake3::hash(
-                            format!("{}:{}:{}:{}", rule.id, canonical, line, column).as_bytes(),
-                        )
-                        .to_hex()
-                        .to_string();
                         let severity = if reclass_syms.contains(sym) {
                             Severity::Low
                         } else {
                             rule.severity
                         };
+                        let id = blake3::hash(
+                            format!("{}:{}:{}:{}", rule.id, canonical, line, column).as_bytes(),
+                        )
+                        .to_hex()
+                        .to_string();
                         findings.push(Finding {
                             id,
                             rule_id: rule.id.clone(),
@@ -2705,7 +3080,7 @@ fn parse_rego_output(
                                 findings.push(obj_to_finding(file, rule, canonical, iobj));
                             } else if let Some(s) = inner.as_str() {
                                 let id = blake3::hash(
-                                    format!("{}:{}:0:0", rule.id, canonical).as_bytes(),
+                                    format!("{}:{}:0:0:{}", rule.id, canonical, s).as_bytes(),
                                 )
                                 .to_hex()
                                 .to_string();
@@ -2731,7 +3106,7 @@ fn parse_rego_output(
                     findings.push(obj_to_finding(file, rule, canonical, obj));
                 }
             } else if let Some(s) = v.as_str() {
-                let id = blake3::hash(format!("{}:{}:0:0", rule.id, canonical).as_bytes())
+                let id = blake3::hash(format!("{}:{}:0:0:{}", rule.id, canonical, s).as_bytes())
                     .to_hex()
                     .to_string();
                 findings.push(Finding {
@@ -2754,7 +3129,7 @@ fn parse_rego_output(
         obj.iter()
             .filter_map(|(k, v)| {
                 if v.as_bool().unwrap_or(false) {
-                    let id = blake3::hash(format!("{}:{}:0:0", rule.id, canonical).as_bytes())
+                    let id = blake3::hash(format!("{}:{}:0:0:{}", rule.id, canonical, k).as_bytes())
                         .to_hex()
                         .to_string();
                     Some(Finding {
@@ -2855,6 +3230,7 @@ fn ast_query_findings(
 struct AstMatch {
     line: usize,
     column: usize,
+    metavars: HashMap<String, String>,
 }
 
 fn into_engine_pattern(p: &LoaderAstPattern) -> pattern::AstPattern {
@@ -2914,10 +3290,10 @@ fn match_ast_pattern(file: &FileIR, pattern: &pattern::AstPattern) -> Vec<AstMat
                 );
             }
             if let Some(mv) = capture_metavars(node, &pattern.metavariables) {
-                let _ = mv; // metavariables currently unused
                 matches.push(AstMatch {
                     line: node.meta.line,
                     column: node.meta.column,
+                    metavars: mv,
                 });
             }
         }

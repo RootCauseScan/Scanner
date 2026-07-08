@@ -231,9 +231,65 @@ pub fn parse_java_project(
             }
         }
     }
+    let stale_count = cache.files.len();
     cache.files.retain(|k, _| seen.contains(k));
-    if let Ok(s) = serde_json::to_string(&cache) {
-        let _ = fs::write(cache_path, s);
+    let cache_dirty = parsed > 0 || cache.files.len() < stale_count;
+    if cache_dirty {
+        if let Ok(s) = serde_json::to_string(&cache) {
+            let _ = fs::write(cache_path, s);
+        }
     }
     Ok((modules, parsed))
+}
+
+/// Links inter-file imports for a slice of Java `FileIR`s produced by individual
+/// `parse_java` calls. Identifies each file's package via its stored source,
+/// builds a package-name→FileIR map, calls `link_imports`, and writes the
+/// linked IRs back into the original slice.
+pub fn link_java_files(files: &mut Vec<FileIR>) {
+    let java_indices: Vec<usize> = files
+        .iter()
+        .enumerate()
+        .filter(|(_, f)| f.file_type == "java")
+        .map(|(i, _)| i)
+        .collect();
+
+    if java_indices.len() < 2 {
+        return;
+    }
+
+    let mut modules: HashMap<String, FileIR> = HashMap::new();
+    let mut pkg_to_idx: HashMap<String, usize> = HashMap::new();
+
+    for &idx in &java_indices {
+        let fir = &files[idx];
+        let source = match &fir.source {
+            Some(s) => s.as_str(),
+            None => continue,
+        };
+        let class = std::path::Path::new(&fir.file_path)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or_default()
+            .to_string();
+        let pkg = if let Some(p) = extract_package(source) {
+            format!("{p}.{class}")
+        } else {
+            class
+        };
+        pkg_to_idx.insert(pkg.clone(), idx);
+        modules.insert(pkg, fir.clone());
+    }
+
+    if modules.len() < 2 {
+        return;
+    }
+
+    symbol_table::link_imports(&mut modules);
+
+    for (pkg, linked) in modules {
+        if let Some(&idx) = pkg_to_idx.get(&pkg) {
+            files[idx] = linked;
+        }
+    }
 }

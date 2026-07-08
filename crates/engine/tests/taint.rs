@@ -1,6 +1,7 @@
 use engine::dataflow::{CallGraph, TaintTracker};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 #[test]
 fn detects_interprocedural_taint() {
@@ -20,8 +21,8 @@ fn detects_interprocedural_taint() {
         s.insert("sink".to_string());
         s
     });
-    let cg = CallGraph { edges };
-    let mut tracker = TaintTracker::new(&cg);
+    let cg = Arc::new(CallGraph { edges });
+    let mut tracker = TaintTracker::new(cg);
     tracker.mark_source("source");
     tracker.mark_sink("sink");
     assert!(tracker.has_flow());

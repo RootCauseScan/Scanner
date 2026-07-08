@@ -292,6 +292,9 @@ pub fn parse_typescript(content: &str, fir: &mut FileIR) {
                                 let dfg = fir.dfg.get_or_insert_with(DataFlowGraph::default);
                                 dfg.call_returns.push((def_id, callee_fn_id));
                             }
+                        } else if matches!(rhs_inner.kind(), "string" | "number" | "true" | "false") {
+                            // String/number/boolean literals are safe values — mark the variable sanitized.
+                            sanitize_ts(scopes, &var);
                         }
                     }
                 }

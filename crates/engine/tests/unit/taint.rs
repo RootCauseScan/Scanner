@@ -1,5 +1,6 @@
 use super::canonical::TEST_MUTEX;
 use super::*;
+use loader::AnyRegex;
 use regex::Regex;
 use std::path::PathBuf;
 
@@ -14,24 +15,24 @@ fn parse(path: &str) -> FileIR {
 
 fn mk_rule() -> RuleSet {
     let source = loader::TaintPattern {
-        allow: vec![Regex::new(r"(?m)(\w+)\s*=\s*source\(\)").unwrap()],
+        allow: vec![AnyRegex::from(Regex::new(r"(?m)(\w+)\s*=\s*source\(\)").unwrap())],
         focus: Some("$VAR".into()),
         ..Default::default()
     };
 
     let sanitizer = loader::TaintPattern {
-        allow: vec![Regex::new(r"(?m)sanitize\((\w+)\)").unwrap()],
+        allow: vec![AnyRegex::from(Regex::new(r"(?m)sanitize\((\w+)\)").unwrap())],
         focus: Some("$VAR".into()),
         ..Default::default()
     };
 
     let reclass = loader::TaintPattern {
-        allow: vec![Regex::new(r"(?m)clean\((\w+)\)").unwrap()],
+        allow: vec![AnyRegex::from(Regex::new(r"(?m)partial_clean\((\w+)\)").unwrap())],
         ..Default::default()
     };
 
     let sink = loader::TaintPattern {
-        allow: vec![Regex::new(r"(?m)sink\((\w+)\)").unwrap()],
+        allow: vec![AnyRegex::from(Regex::new(r"(?m)sink\((\w+)\)").unwrap())],
         ..Default::default()
     };
     let rule = CompiledRule {
@@ -84,5 +85,6 @@ fn reclassifies_flow() {
     let file = parse("../../examples/fixtures/python/taint/reclass.py");
     let rules = mk_rule();
     let findings = analyze_file(&file, &rules);
-    assert_eq!(findings.len(), 0);
+    assert_eq!(findings.len(), 1);
+    assert_eq!(findings[0].severity, Severity::Low);
 }

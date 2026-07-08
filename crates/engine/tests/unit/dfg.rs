@@ -112,27 +112,6 @@ fn ignores_unrelated_flow_in_java() {
 }
 
 #[test]
-fn debug_php_good_dfg() {
-    let file = parse("../../examples/fixtures/php/taint/good.php");
-    println!("DFG nodes:");
-    if let Some(dfg) = &file.dfg {
-        for (i, node) in dfg.nodes.iter().enumerate() {
-            println!(
-                "  {}: {} ({:?}) sanitized={}",
-                i, node.name, node.kind, node.sanitized
-            );
-        }
-        println!("DFG edges: {:?}", dfg.edges);
-    }
-    println!("Symbols:");
-    for (name, sym) in &file.symbols {
-        println!("  {}: sanitized={}, def={:?}", name, sym.sanitized, sym.def);
-    }
-    let result = find_taint_path(&file, "source", "sink");
-    println!("find_taint_path result: {result:?}");
-}
-
-#[test]
 fn finds_multi_step_path() {
     let mut file = FileIR::new("test".into(), "python".into());
     let dfg = DataFlowGraph {
@@ -143,6 +122,7 @@ fn finds_multi_step_path() {
                 kind: DFNodeKind::Def,
                 sanitized: false,
                 branch: None,
+                ..Default::default()
             },
             DFNode {
                 id: 1,
@@ -150,6 +130,7 @@ fn finds_multi_step_path() {
                 kind: DFNodeKind::Def,
                 sanitized: false,
                 branch: None,
+                ..Default::default()
             },
             DFNode {
                 id: 2,
@@ -157,6 +138,7 @@ fn finds_multi_step_path() {
                 kind: DFNodeKind::Use,
                 sanitized: false,
                 branch: None,
+                ..Default::default()
             },
         ],
         edges: vec![(0, 1), (1, 2)],
@@ -198,6 +180,7 @@ fn stops_at_sanitized_node() {
                 kind: DFNodeKind::Def,
                 sanitized: false,
                 branch: None,
+                ..Default::default()
             },
             DFNode {
                 id: 1,
@@ -205,6 +188,7 @@ fn stops_at_sanitized_node() {
                 kind: DFNodeKind::Def,
                 sanitized: true,
                 branch: None,
+                ..Default::default()
             },
             DFNode {
                 id: 2,
@@ -212,6 +196,7 @@ fn stops_at_sanitized_node() {
                 kind: DFNodeKind::Use,
                 sanitized: false,
                 branch: None,
+                ..Default::default()
             },
         ],
         edges: vec![(0, 1), (1, 2)],
@@ -238,3 +223,4 @@ fn stops_at_sanitized_node() {
     );
     assert_eq!(find_taint_path(&file, "source", "sink"), None);
 }
+

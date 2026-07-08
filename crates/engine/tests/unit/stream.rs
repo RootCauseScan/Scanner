@@ -90,6 +90,16 @@ fn stream_memory_stable() {
     }
 
     let rules = RuleSet::default();
+    // Warm up the rayon thread pool so its one-time thread-stack allocation
+    // doesn't count against the memory-growth budget below.
+    let _ = analyze_files_streaming(
+        (0..10).map(|_| mk_file_ir(vec![])),
+        &rules,
+        &EngineConfig::default(),
+        None,
+        None,
+        None,
+    );
     let start_mem = current_rss();
     let files = (0..500).map(|_| mk_file_ir(vec![]));
     let findings =
