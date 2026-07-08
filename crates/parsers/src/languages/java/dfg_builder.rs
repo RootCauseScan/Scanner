@@ -718,25 +718,46 @@ fn build_dfg(
                             } else {
                                 let mut call_sanitizer = false;
                                 if let Some(call) = extract_call_path(val, src) {
-                                    if resolve_import(&call, imports, wildcards)
+                                    let resolved: Vec<String> = resolve_import(&call, imports, wildcards)
                                         .into_iter()
                                         .chain(std::iter::once(call.clone()))
-                                        .any(|f| {
-                                            catalog_module::is_sanitizer("java", &f)
-                                                || matches!(
-                                                    fir.symbol_types.get(&f),
-                                                    Some(SymbolKind::Sanitizer)
-                                                )
-                                        })
-                                    {
+                                        .collect();
+                                    if resolved.iter().any(|f| {
+                                        catalog_module::is_sanitizer("java", f)
+                                            || matches!(
+                                                fir.symbol_types.get(f.as_str()),
+                                                Some(SymbolKind::Sanitizer)
+                                            )
+                                    }) {
                                         sanitized = true;
                                         call_sanitizer = true;
                                     }
+                                    let is_known_source = resolved.iter().any(|f| {
+                                        catalog_module::is_source("java", f)
+                                            || matches!(
+                                                fir.symbol_types.get(f.as_str()),
+                                                Some(SymbolKind::Source)
+                                            )
+                                    });
                                     if let Some(args) = val.child_by_field_name("arguments") {
                                         gather_ids(args, src, &mut ids);
                                     }
                                     if !call_sanitizer {
                                         gather_ids(val, src, &mut ids);
+                                    }
+                                    let has_class_receiver = val
+                                        .child_by_field_name("object")
+                                        .and_then(|obj| {
+                                            if obj.kind() == "identifier" {
+                                                obj.utf8_text(src.as_bytes()).ok().map(|s| s.to_string())
+                                            } else {
+                                                None
+                                            }
+                                        })
+                                        .map(|r| r.chars().next().map(|c| c.is_uppercase()).unwrap_or(false))
+                                        .unwrap_or(false);
+                                    if !call_sanitizer && !is_known_source && ids.is_empty() && has_class_receiver {
+                                        sanitized = true;
                                     }
                                 } else {
                                     gather_ids(val, src, &mut ids);
