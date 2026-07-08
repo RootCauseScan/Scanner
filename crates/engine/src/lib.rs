@@ -123,10 +123,13 @@ pub fn find_taint_path(fir: &FileIR, _source: &str, _sink: &str) -> Option<Vec<u
     let mut visited = vec![false; dfg.nodes.len()];
 
     for (idx, node) in dfg.nodes.iter().enumerate() {
-        if matches!(node.kind, ir::DFNodeKind::Def)
-            && indegree[idx] == 0
-            && is_unsanitized(fir, &node.name)
-        {
+        // Seed BFS from two kinds of taint roots:
+        // 1. Def nodes with no incoming edges (results of unknown/source calls).
+        // 2. Param nodes — method parameters are always external input regardless
+        //    of their indegree (which is always 0 as nothing flows INTO a param).
+        let is_root = matches!(node.kind, ir::DFNodeKind::Def) && indegree[idx] == 0
+            || matches!(node.kind, ir::DFNodeKind::Param);
+        if is_root && is_unsanitized(fir, &node.name) {
             queue.push_back((idx, vec![idx]));
             visited[idx] = true;
         }

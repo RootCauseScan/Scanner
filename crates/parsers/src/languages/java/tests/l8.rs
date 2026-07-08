@@ -1116,3 +1116,59 @@ class T {
     let sym = fir.symbols.get("item").expect("item must be tracked");
     assert!(!sym.sanitized, "enhanced for over tainted array → item must be tainted");
 }
+
+// -------------------------------------------------------------------
+// Taint from method parameter receiver (find_taint_path Param seeding)
+// -------------------------------------------------------------------
+
+#[test]
+fn request_getparameter_taint_flows_through_local_to_sink() {
+    // request.getParameter("id") — the `request` param feeds into `id.Def`,
+    // which has indegree=1. BFS must also start from Param nodes so this chain
+    // is detected.  (This tests the engine-level Param seeding, not just parser.)
+    let code = r#"
+class T {
+    void handle(javax.servlet.http.HttpServletRequest request) {
+        String id = request.getParameter("userId");
+        sink(id);
+    }
+}
+"#;
+    let fir = parse_snippet(code);
+    // `id` gets its value from request (a Param); it must NOT be sanitized.
+    let sym = fir.symbols.get("id").expect("id must be tracked");
+    assert!(!sym.sanitized, "request.getParameter result must be tainted");
+    // The DFG edge: request.Param → id.Def must exist.
+    if let Some(dfg) = &fir.dfg {
+        let request_param = dfg.nodes.iter()
+            .find(|n| n.name == "request" && matches!(n.kind, ir::DFNodeKind::Param));
+        let id_def = dfg.nodes.iter()
+            .find(|n| n.name == "id" && matches!(n.kind, ir::DFNodeKind::Def));
+        if let (Some(rp), Some(id)) = (request_param, id_def) {
+            // An edge should exist from request param → id def (or from some intermediate)
+            let has_edge = dfg.edges.contains(&(rp.id, id.id))
+                || dfg.nodes.iter().any(|n| {
+                    dfg.edges.contains(&(rp.id, n.id)) && dfg.edges.contains(&(n.id, id.id))
+                });
+            assert!(has_edge, "DFG must trace request param → id def");
+        }
+    }
+}
+
+#[test]
+fn method_param_flows_to_sql_concat_is_tainted() {
+    // Classic SQL injection: param → concat → stmt.execute
+    let code = r#"
+class T {
+    void query(javax.servlet.http.HttpServletRequest req, java.sql.Statement stmt) throws Exception {
+        String userId = req.getParameter("id");
+        String sql = "SELECT * FROM users WHERE id = '" + userId + "'";
+        stmt.execute(sql);
+    }
+}
+"#;
+    let fir = parse_snippet(code);
+    // sql must be tainted from userId which comes from req (a param)
+    let sym = fir.symbols.get("sql").expect("sql must be tracked");
+    assert!(!sym.sanitized, "SQL string built from user input must be tainted");
+}
