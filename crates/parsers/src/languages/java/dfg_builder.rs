@@ -46,7 +46,9 @@ fn node_text_trimmed(node: Node, src: &str) -> Option<String> {
 /// For ternary expressions only the value branches are checked, not the condition.
 fn is_constant_expression(node: Node) -> bool {
     let k = node.kind();
-    if k.ends_with("_literal") || k == "true" || k == "false" || k == "null_literal" {
+    if k.ends_with("_literal") || k == "true" || k == "false" || k == "null_literal"
+        || k == "text_block"
+    {
         return true;
     }
     if k == "identifier" || k == "method_invocation" || k == "object_creation_expression" {
@@ -435,37 +437,46 @@ fn build_dfg(
                     if let Some(params) = node.child_by_field_name("parameters") {
                         let mut pc = params.walk();
                         for p in params.children(&mut pc) {
-                            if p.kind() == "formal_parameter" {
-                                if let Some(pn) = p.child_by_field_name("name") {
-                                    if let Ok(pname) = pn.utf8_text(src.as_bytes()) {
-                                        let (pid, param_line) = stable_node_id2(
-                                            fir,
-                                            Some(pn),
-                                            &format!("param:{name}:{pname}"),
-                                        );
-                                        push_node(
-                                            fir,
-                                            DFNode {
-                                                id: pid,
-                                                name: pname.to_string(),
-                                                kind: DFNodeKind::Param,
-                                                sanitized: false,
-                                                branch: branch_stack.last().copied(),
-                                                line: param_line,
-                        ..Default::default()
-                                            },
-                                        );
-                                        fn_params.entry(id).or_default().push(pid);
-                                        fir.symbols.insert(
-                                            pname.to_string(),
-                                            Symbol {
-                                                name: pname.to_string(),
-                                                sanitized: false,
-                                                def: Some(pid),
-                                                alias_of: None,
-                                            },
-                                        );
-                                    }
+                            let pn_opt = if p.kind() == "formal_parameter" {
+                                p.child_by_field_name("name")
+                            } else if p.kind() == "spread_parameter" {
+                                // spread_parameter (varargs): named children are
+                                // [type_identifier, variable_declarator]; no "name" field.
+                                (0..p.named_child_count())
+                                    .filter_map(|i| p.named_child(i))
+                                    .find(|c| c.kind() == "variable_declarator")
+                            } else {
+                                None
+                            };
+                            if let Some(pn) = pn_opt {
+                                if let Ok(pname) = pn.utf8_text(src.as_bytes()) {
+                                    let (pid, param_line) = stable_node_id2(
+                                        fir,
+                                        Some(pn),
+                                        &format!("param:{name}:{pname}"),
+                                    );
+                                    push_node(
+                                        fir,
+                                        DFNode {
+                                            id: pid,
+                                            name: pname.to_string(),
+                                            kind: DFNodeKind::Param,
+                                            sanitized: false,
+                                            branch: branch_stack.last().copied(),
+                                            line: param_line,
+                                            ..Default::default()
+                                        },
+                                    );
+                                    fn_params.entry(id).or_default().push(pid);
+                                    fir.symbols.insert(
+                                        pname.to_string(),
+                                        Symbol {
+                                            name: pname.to_string(),
+                                            sanitized: false,
+                                            def: Some(pid),
+                                            alias_of: None,
+                                        },
+                                    );
                                 }
                             }
                         }
@@ -512,37 +523,46 @@ fn build_dfg(
                     if let Some(params) = node.child_by_field_name("parameters") {
                         let mut pc = params.walk();
                         for p in params.children(&mut pc) {
-                            if p.kind() == "formal_parameter" {
-                                if let Some(pn) = p.child_by_field_name("name") {
-                                    if let Ok(pname) = pn.utf8_text(src.as_bytes()) {
-                                        let (pid, param_line) = stable_node_id2(
-                                            fir,
-                                            Some(pn),
-                                            &format!("param:{name}:{pname}"),
-                                        );
-                                        push_node(
-                                            fir,
-                                            DFNode {
-                                                id: pid,
-                                                name: pname.to_string(),
-                                                kind: DFNodeKind::Param,
-                                                sanitized: false,
-                                                branch: branch_stack.last().copied(),
-                                                line: param_line,
-                                                ..Default::default()
-                                            },
-                                        );
-                                        fn_params.entry(id).or_default().push(pid);
-                                        fir.symbols.insert(
-                                            pname.to_string(),
-                                            Symbol {
-                                                name: pname.to_string(),
-                                                sanitized: false,
-                                                def: Some(pid),
-                                                alias_of: None,
-                                            },
-                                        );
-                                    }
+                            let pn_opt = if p.kind() == "formal_parameter" {
+                                p.child_by_field_name("name")
+                            } else if p.kind() == "spread_parameter" {
+                                // spread_parameter (varargs): named children are
+                                // [type_identifier, variable_declarator]; no "name" field.
+                                (0..p.named_child_count())
+                                    .filter_map(|i| p.named_child(i))
+                                    .find(|c| c.kind() == "variable_declarator")
+                            } else {
+                                None
+                            };
+                            if let Some(pn) = pn_opt {
+                                if let Ok(pname) = pn.utf8_text(src.as_bytes()) {
+                                    let (pid, param_line) = stable_node_id2(
+                                        fir,
+                                        Some(pn),
+                                        &format!("param:{name}:{pname}"),
+                                    );
+                                    push_node(
+                                        fir,
+                                        DFNode {
+                                            id: pid,
+                                            name: pname.to_string(),
+                                            kind: DFNodeKind::Param,
+                                            sanitized: false,
+                                            branch: branch_stack.last().copied(),
+                                            line: param_line,
+                                            ..Default::default()
+                                        },
+                                    );
+                                    fn_params.entry(id).or_default().push(pid);
+                                    fir.symbols.insert(
+                                        pname.to_string(),
+                                        Symbol {
+                                            name: pname.to_string(),
+                                            sanitized: false,
+                                            def: Some(pid),
+                                            alias_of: None,
+                                        },
+                                    );
                                 }
                             }
                         }
@@ -589,6 +609,7 @@ fn build_dfg(
                                         || vk == "true"
                                         || vk == "false"
                                         || vk == "null_literal"
+                                        || vk == "text_block"
                                         || is_constant_expression(val)
                                     {
                                         sanitized = true;
@@ -712,6 +733,7 @@ fn build_dfg(
                                 || vkind == "true"
                                 || vkind == "false"
                                 || vkind == "null_literal"
+                                || vkind == "text_block"
                                 || is_constant_expression(val)
                             {
                                 sanitized = true;
@@ -831,6 +853,7 @@ fn build_dfg(
                                         || vkind == "true"
                                         || vkind == "false"
                                         || vkind == "null_literal"
+                                        || vkind == "text_block"
                                         || is_constant_expression(val)
                                     {
                                         sanitized = true;
@@ -894,6 +917,19 @@ fn build_dfg(
                                             }
                                         }
                                     }
+                                }
+                            }
+                            // If all referenced variables are sanitized, the result is sanitized
+                            // too (e.g. `"prefix" + cleanVar` or `a + b` where both are clean).
+                            if !sanitized && !ids.is_empty() {
+                                let all_clean = ids.iter().all(|name| {
+                                    let canonical = resolve_alias(name, &fir.symbols);
+                                    find_symbol(&canonical, &fir.symbols)
+                                        .map(|s| s.sanitized)
+                                        .unwrap_or(false)
+                                });
+                                if all_clean {
+                                    sanitized = true;
                                 }
                             }
                             let (id, local_line) = stable_node_id2(fir, Some(name_node), &format!("local:{var}"));
@@ -973,6 +1009,7 @@ fn build_dfg(
                                 || rkind == "true"
                                 || rkind == "false"
                                 || rkind == "null_literal"
+                                || rkind == "text_block"
                                 || is_constant_expression(right)
                             {
                                 sanitized = true;
@@ -1031,6 +1068,18 @@ fn build_dfg(
                                     }
                                 }
                             }
+                        }
+                    }
+                    // If all referenced variables are sanitized, the result is sanitized.
+                    if !sanitized && !ids.is_empty() {
+                        let all_clean = ids.iter().all(|name| {
+                            let canonical = resolve_alias(name, &fir.symbols);
+                            find_symbol(&canonical, &fir.symbols)
+                                .map(|s| s.sanitized)
+                                .unwrap_or(false)
+                        });
+                        if all_clean {
+                            sanitized = true;
                         }
                     }
                     // Detect compound assignment (+=, -=, etc.): tree-sitter-java uses

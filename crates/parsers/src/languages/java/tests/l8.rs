@@ -1172,3 +1172,132 @@ class T {
     let sym = fir.symbols.get("sql").expect("sql must be tracked");
     assert!(!sym.sanitized, "SQL string built from user input must be tainted");
 }
+
+// -------------------------------------------------------------------
+// Varargs (variable_arity_parameter)
+// -------------------------------------------------------------------
+
+#[test]
+fn varargs_parameter_creates_param_node() {
+    // `String... args` should create a Param node just like a regular parameter.
+    let code = r#"
+class T {
+    void process(String... args) {
+        sink(args[0]);
+    }
+}
+"#;
+    let fir = parse_snippet(code);
+    let dfg = fir.dfg.as_ref().expect("dfg");
+    let param = dfg
+        .nodes
+        .iter()
+        .find(|n| n.name == "args" && matches!(n.kind, DFNodeKind::Param));
+    assert!(param.is_some(), "varargs param 'args' must create a Param DFG node");
+    let sym = fir.symbols.get("args").expect("args must be in symbol table");
+    assert!(!sym.sanitized, "varargs param should be tainted (external input)");
+}
+
+#[test]
+fn varargs_param_with_regular_params_both_tracked() {
+    let code = r#"
+class T {
+    void log(String prefix, String... messages) {
+        sink(messages[0]);
+    }
+}
+"#;
+    let fir = parse_snippet(code);
+    let dfg = fir.dfg.as_ref().expect("dfg");
+    let prefix = dfg.nodes.iter().find(|n| n.name == "prefix" && matches!(n.kind, DFNodeKind::Param));
+    let messages = dfg.nodes.iter().find(|n| n.name == "messages" && matches!(n.kind, DFNodeKind::Param));
+    assert!(prefix.is_some(), "regular param 'prefix' must be tracked");
+    assert!(messages.is_some(), "varargs param 'messages' must be tracked");
+}
+
+// -------------------------------------------------------------------
+// Text block (Java 15+) sanitized as literal
+// -------------------------------------------------------------------
+
+#[test]
+fn text_block_assignment_is_sanitized() {
+    // A text block used in an assignment should be marked sanitized.
+    // Even if the parser represents text_block differently from string_literal,
+    // the sanitization logic should treat it as a constant.
+    let code = "class T {\n    void run() {\n        String q = \"\"\"\n            SELECT id FROM users\n            \"\"\";\n        String result = q;\n    }\n}";
+    let fir = parse_snippet(code);
+    // q should be sanitized (text block = constant), result should inherit
+    if let Some(sym) = fir.symbols.get("q") {
+        assert!(sym.sanitized, "text block variable should be sanitized");
+    }
+}
+
+// -------------------------------------------------------------------
+// Static final field patterns (compile-time constants)
+// -------------------------------------------------------------------
+
+#[test]
+fn static_final_string_constant_is_sanitized() {
+    // Static final string fields initialized with a literal are compile-time constants.
+    let code = r#"
+class T {
+    static final String TABLE = "users";
+    void query() {
+        String sql = "SELECT * FROM " + TABLE;
+        sink(sql);
+    }
+}
+"#;
+    let fir = parse_snippet(code);
+    // Class fields are stored with the "this." prefix in the symbol table.
+    let sym = fir.symbols.get("this.TABLE").expect("this.TABLE must be tracked");
+    assert!(sym.sanitized, "static final string literal should be sanitized");
+}
+
+// -------------------------------------------------------------------
+// Compound assignment with tainted RHS makes result tainted
+// -------------------------------------------------------------------
+
+#[test]
+fn plus_equals_with_tainted_rhs_produces_tainted_result() {
+    let code = r#"
+class T {
+    void run(String userInput) {
+        String sql = "SELECT * FROM users WHERE id=";
+        sql += userInput;
+        sink(sql);
+    }
+}
+"#;
+    let fir = parse_snippet(code);
+    let sym = fir.symbols.get("sql").expect("sql must be tracked");
+    assert!(!sym.sanitized, "sql after += userInput must be tainted");
+}
+
+// -------------------------------------------------------------------
+// Exception message taint (log injection via catch variable)
+// -------------------------------------------------------------------
+
+#[test]
+fn catch_variable_message_taint_tracked_as_use() {
+    // When `e.getMessage()` is passed to a logger inside a catch block,
+    // the catch variable `e` should be a Param so that its use is visible.
+    let code = r#"
+class T {
+    void run(String input) {
+        try {
+            riskyOp(input);
+        } catch (Exception e) {
+            sink(e.getMessage());
+        }
+    }
+}
+"#;
+    let fir = parse_snippet(code);
+    // `e` should be in the symbol table as unsanitized (comes from outside)
+    let sym = fir.symbols.get("e").expect("catch variable 'e' must be in symbol table");
+    assert!(!sym.sanitized, "catch variable should be tainted (external exception data)");
+    let dfg = fir.dfg.as_ref().expect("dfg");
+    let e_param = dfg.nodes.iter().find(|n| n.name == "e" && matches!(n.kind, DFNodeKind::Param));
+    assert!(e_param.is_some(), "catch variable must have a Param DFG node");
+}
