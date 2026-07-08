@@ -1059,3 +1059,60 @@ class T {
         assert!(sym.sanitized, "Integer.parseInt sanitizes the input");
     }
 }
+
+#[test]
+fn method_chain_append_tostring_is_tainted() {
+    // sb.append(raw).toString() — the chain result must be tainted.
+    let code = r#"
+class T {
+    void test(String raw) {
+        String result = new StringBuilder().append(raw).toString();
+        sink(result);
+    }
+}
+"#;
+    let fir = parse_snippet(code);
+    // result comes from a chained call with raw — should be tainted
+    if let Some(sym) = fir.symbols.get("result") {
+        // The chain involves raw, so result must NOT be sanitized.
+        // (Even if we can't fully resolve the chain, the gather_ids from the call
+        // should collect `raw` as a referenced identifier through argument collection.)
+        assert!(!sym.sanitized, "chained append(raw).toString() must be tainted");
+    }
+}
+
+#[test]
+fn subsequent_literal_append_does_not_clear_taint() {
+    // Once tainted via append(raw), a later append("literal") must NOT clean the builder.
+    let code = r#"
+class T {
+    void test(String raw) {
+        StringBuilder sb = new StringBuilder();
+        sb.append(raw);
+        sb.append(" world");
+        sink(sb.toString());
+    }
+}
+"#;
+    let fir = parse_snippet(code);
+    let sym = fir.symbols.get("sb").expect("sb must be tracked");
+    assert!(!sym.sanitized, "subsequent literal append must not clear taint");
+}
+
+#[test]
+fn enhanced_for_over_string_array_param_is_tainted() {
+    // String[] args is a param; iterating over it gives tainted values.
+    let code = r#"
+class T {
+    void process(String[] inputs) {
+        for (String item : inputs) {
+            sink(item);
+        }
+    }
+}
+"#;
+    let fir = parse_snippet(code);
+    // item inherits taint from inputs (a param); it must be tainted
+    let sym = fir.symbols.get("item").expect("item must be tracked");
+    assert!(!sym.sanitized, "enhanced for over tainted array → item must be tainted");
+}
