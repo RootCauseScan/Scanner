@@ -1835,3 +1835,132 @@ class T {
     }
 }
 
+
+// -------------------------------------------------------------------
+// Taint through Array.asList and iteration
+// -------------------------------------------------------------------
+
+#[test]
+fn arrays_as_list_with_tainted_is_tainted() {
+    // Arrays.asList(tainted) — the list carries the taint.
+    let code = r#"
+class T {
+    void run(String raw) {
+        java.util.List<String> list = java.util.Arrays.asList(raw, "safe");
+        for (String item : list) {
+            sink(item);
+        }
+    }
+}
+"#;
+    let fir = parse_snippet(code);
+    if let Some(sym) = fir.symbols.get("list") {
+        assert!(!sym.sanitized, "Arrays.asList with tainted element must produce tainted list");
+    }
+}
+
+#[test]
+fn arrays_as_list_all_literals_is_sanitized() {
+    let code = r#"
+class T {
+    void run() {
+        java.util.List<String> list = java.util.Arrays.asList("a", "b");
+        for (String item : list) {
+            sink(item);
+        }
+    }
+}
+"#;
+    let fir = parse_snippet(code);
+    if let Some(sym) = fir.symbols.get("list") {
+        assert!(sym.sanitized, "Arrays.asList with only literals must be sanitized");
+    }
+}
+
+// -------------------------------------------------------------------
+// Taint through Collections utility calls
+// -------------------------------------------------------------------
+
+#[test]
+fn collections_singleton_literal_is_sanitized() {
+    let code = r#"
+class T {
+    void run() {
+        java.util.List<String> list = java.util.Collections.singletonList("safe");
+        sink(list.get(0));
+    }
+}
+"#;
+    let fir = parse_snippet(code);
+    if let Some(sym) = fir.symbols.get("list") {
+        assert!(sym.sanitized, "singletonList with literal must be sanitized");
+    }
+}
+
+// -------------------------------------------------------------------
+// Conditional (ternary) in method arg: taint from either branch
+// -------------------------------------------------------------------
+
+#[test]
+fn ternary_in_method_arg_propagates_taint() {
+    // sink(flag ? tainted : "safe") — even though one branch is safe,
+    // the ternary result may be tainted, so sink sees potential taint.
+    let code = r#"
+class T {
+    void run(boolean flag, String tainted) {
+        String result = flag ? tainted : "safe";
+        sink(result);
+    }
+}
+"#;
+    let fir = parse_snippet(code);
+    if let Some(sym) = fir.symbols.get("result") {
+        assert!(!sym.sanitized, "ternary with one tainted branch must produce tainted result");
+    }
+}
+
+// -------------------------------------------------------------------
+// StringBuilder initialized from tainted arg
+// -------------------------------------------------------------------
+
+#[test]
+fn stringbuilder_from_tainted_constructor_arg_is_tainted() {
+    let code = r#"
+class T {
+    void run(String raw) {
+        StringBuilder sb = new StringBuilder(raw);
+        sink(sb.toString());
+    }
+}
+"#;
+    let fir = parse_snippet(code);
+    if let Some(sym) = fir.symbols.get("sb") {
+        assert!(!sym.sanitized, "StringBuilder(tainted) must be tainted");
+    }
+}
+
+// -------------------------------------------------------------------
+// Literal concatenation in if-else then merge
+// -------------------------------------------------------------------
+
+#[test]
+fn if_else_one_branch_tainted_merge_is_tainted() {
+    let code = r#"
+class T {
+    void run(boolean flag, String raw) {
+        String val;
+        if (flag) {
+            val = raw;
+        } else {
+            val = "safe";
+        }
+        sink(val);
+    }
+}
+"#;
+    let fir = parse_snippet(code);
+    if let Some(sym) = fir.symbols.get("val") {
+        assert!(!sym.sanitized, "after if-else with one tainted branch, val must be tainted");
+    }
+}
+
