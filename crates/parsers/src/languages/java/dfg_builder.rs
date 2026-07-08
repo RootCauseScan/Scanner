@@ -133,7 +133,12 @@ fn gather_ids(node: Node, src: &str, out: &mut Vec<String>) {
             if let Some(obj) = node.child_by_field_name("object") {
                 if obj.kind() == "identifier" {
                     if let Ok(id) = obj.utf8_text(src.as_bytes()) {
-                        out.push(id.to_string());
+                        // Skip class-name receivers (Java convention: uppercase-first).
+                        // `String.format(...)` → `String` is a type, not a variable.
+                        let is_type = id.chars().next().map(|c| c.is_uppercase()).unwrap_or(false);
+                        if !is_type {
+                            out.push(id.to_string());
+                        }
                     }
                 } else {
                     gather_ids(obj, src, out);
@@ -811,25 +816,51 @@ fn build_dfg(
                                     } else {
                                         let mut call_sanitizer = false;
                                         if let Some(call) = extract_call_path(val, src) {
-                                            if resolve_import(&call, imports, wildcards)
+                                            let resolved: Vec<String> = resolve_import(&call, imports, wildcards)
                                                 .into_iter()
                                                 .chain(std::iter::once(call.clone()))
-                                                .any(|f| {
-                                                    catalog_module::is_sanitizer("java", &f)
-                                                        || matches!(
-                                                            fir.symbol_types.get(&f),
-                                                            Some(SymbolKind::Sanitizer)
-                                                        )
-                                                })
-                                            {
+                                                .collect();
+                                            if resolved.iter().any(|f| {
+                                                catalog_module::is_sanitizer("java", f)
+                                                    || matches!(
+                                                        fir.symbol_types.get(f.as_str()),
+                                                        Some(SymbolKind::Sanitizer)
+                                                    )
+                                            }) {
                                                 sanitized = true;
                                                 call_sanitizer = true;
                                             }
+                                            let is_known_source = resolved.iter().any(|f| {
+                                                catalog_module::is_source("java", f)
+                                                    || matches!(
+                                                        fir.symbol_types.get(f.as_str()),
+                                                        Some(SymbolKind::Source)
+                                                    )
+                                            });
                                             if let Some(args) = val.child_by_field_name("arguments") {
                                                 gather_ids(args, src, &mut ids);
                                             }
                                             if !call_sanitizer {
                                                 gather_ids(val, src, &mut ids);
+                                            }
+                                            // Static utility calls (e.g. String.format("fmt", "lit"))
+                                            // with a class-name receiver and no variable args carry
+                                            // no taint — the receiver is a type, not a variable.
+                                            let has_class_receiver = val
+                                                .child_by_field_name("object")
+                                                .and_then(|obj| {
+                                                    if obj.kind() == "identifier" {
+                                                        obj.utf8_text(src.as_bytes()).ok().map(|s| s.to_string())
+                                                    } else {
+                                                        None
+                                                    }
+                                                })
+                                                .map(|r| {
+                                                    r.chars().next().map(|c| c.is_uppercase()).unwrap_or(false)
+                                                })
+                                                .unwrap_or(false);
+                                            if !call_sanitizer && !is_known_source && ids.is_empty() && has_class_receiver {
+                                                sanitized = true;
                                             }
                                         } else {
                                             gather_ids(val, src, &mut ids);
@@ -927,25 +958,48 @@ fn build_dfg(
                             } else {
                                 let mut call_sanitizer = false;
                                 if let Some(call) = extract_call_path(right, src) {
-                                    if resolve_import(&call, imports, wildcards)
+                                    let resolved: Vec<String> = resolve_import(&call, imports, wildcards)
                                         .into_iter()
                                         .chain(std::iter::once(call.clone()))
-                                        .any(|f| {
-                                            catalog_module::is_sanitizer("java", &f)
-                                                || matches!(
-                                                    fir.symbol_types.get(&f),
-                                                    Some(SymbolKind::Sanitizer)
-                                                )
-                                        })
-                                    {
+                                        .collect();
+                                    if resolved.iter().any(|f| {
+                                        catalog_module::is_sanitizer("java", f)
+                                            || matches!(
+                                                fir.symbol_types.get(f.as_str()),
+                                                Some(SymbolKind::Sanitizer)
+                                            )
+                                    }) {
                                         sanitized = true;
                                         call_sanitizer = true;
                                     }
+                                    let is_known_source = resolved.iter().any(|f| {
+                                        catalog_module::is_source("java", f)
+                                            || matches!(
+                                                fir.symbol_types.get(f.as_str()),
+                                                Some(SymbolKind::Source)
+                                            )
+                                    });
                                     if let Some(args) = right.child_by_field_name("arguments") {
                                         gather_ids(args, src, &mut ids);
                                     }
                                     if !call_sanitizer {
                                         gather_ids(right, src, &mut ids);
+                                    }
+                                    let has_class_receiver = right
+                                        .child_by_field_name("object")
+                                        .and_then(|obj| {
+                                            if obj.kind() == "identifier" {
+                                                obj.utf8_text(src.as_bytes()).ok().map(|s| s.to_string())
+                                            } else {
+                                                None
+                                            }
+                                        })
+                                        .map(|r| {
+                                            r.chars().next().map(|c| c.is_uppercase()).unwrap_or(false)
+                                        })
+                                        .unwrap_or(false);
+                                    if !call_sanitizer && !is_known_source && ids.is_empty() && has_class_receiver {
+                                        sanitized = true;
                                     }
                                 } else {
                                     gather_ids(right, src, &mut ids);
@@ -2320,7 +2374,7 @@ fn build_dfg(
                 }
             }
 
-            if let (Some(field), Some(method)) = (field_name, method_name) {
+            if let (Some(field), Some(method)) = (field_name, method_name.clone()) {
                 if matches!(method.as_str(), "get" | "remove") {
                     let canonical = resolve_alias(&field, &fir.symbols);
                     let sanitized = find_symbol(&canonical, &fir.symbols)
@@ -2343,6 +2397,68 @@ fn build_dfg(
                     if let Some(def_id) = find_symbol(&canonical, &fir.symbols).and_then(|s| s.def)
                     {
                         push_edge(fir, (def_id, use_id));
+                    }
+                }
+            }
+
+            // Mutation tracking: for builder/stream methods that mutate the receiver,
+            // propagate taint from arguments to the receiver's symbol.
+            if let (Some(receiver), Some(method)) = (receiver_name.as_ref(), method_name.as_ref())
+            {
+                if matches!(
+                    method.as_str(),
+                    "append"
+                        | "insert"
+                        | "prepend"
+                        | "write"
+                        | "print"
+                        | "println"
+                        | "printf"
+                        | "format"
+                        | "setCharAt"
+                        | "delete"
+                        | "deleteCharAt"
+                        | "replace"
+                ) {
+                    let any_arg_tainted = arg_nodes.iter().any(|arg| {
+                        if is_constant_expression(*arg) {
+                            return false;
+                        }
+                        let mut vars = Vec::new();
+                        gather_ids(*arg, src, &mut vars);
+                        if vars.is_empty() {
+                            // Unknown expression: conservative unless it's a literal kind
+                            !arg.kind().ends_with("_literal")
+                                && arg.kind() != "null_literal"
+                                && arg.kind() != "true"
+                                && arg.kind() != "false"
+                        } else {
+                            vars.iter().any(|var| {
+                                let canonical = resolve_alias(var, &fir.symbols);
+                                !find_symbol(&canonical, &fir.symbols)
+                                    .map(|s| s.sanitized)
+                                    .unwrap_or(false)
+                            })
+                        }
+                    });
+                    if any_arg_tainted {
+                        let canonical = resolve_alias(receiver, &fir.symbols);
+                        // Update the symbol table so downstream uses pick up the new taint.
+                        if let Some(sym) = fir.symbols.get_mut(&canonical) {
+                            sym.sanitized = false;
+                        } else if let Some(sym) = fir.symbols.get_mut(receiver.as_str()) {
+                            sym.sanitized = false;
+                        }
+                        // Also update the existing Def node in the DFG.
+                        let def_id_opt =
+                            find_symbol(&canonical, &fir.symbols).and_then(|s| s.def);
+                        if let Some(def_id) = def_id_opt {
+                            if let Some(dfg) = fir.dfg.as_mut() {
+                                if let Some(n) = find_node_mut(dfg, def_id) {
+                                    n.sanitized = false;
+                                }
+                            }
+                        }
                     }
                 }
             }

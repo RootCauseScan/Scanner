@@ -829,3 +829,233 @@ class T {
         assert!(sym.sanitized, "resource initialized with literal-arg constructor should be sanitized");
     }
 }
+
+// -------------------------------------------------------------------
+// StringBuilder mutation tracking
+// -------------------------------------------------------------------
+
+#[test]
+fn append_tainted_arg_marks_builder_tainted() {
+    // sb starts clean; after sb.append(raw) it must be tainted.
+    let code = r#"
+class T {
+    void test(String raw) {
+        StringBuilder sb = new StringBuilder();
+        sb.append(raw);
+        sink(sb.toString());
+    }
+}
+"#;
+    let fir = parse_snippet(code);
+    let sym = fir.symbols.get("sb").expect("sb must be tracked");
+    assert!(!sym.sanitized, "sb.append(tainted) must mark sb as tainted");
+}
+
+#[test]
+fn append_literal_leaves_builder_clean() {
+    // sb.append("constant") — literal arg; sb stays clean.
+    let code = r#"
+class T {
+    void test() {
+        StringBuilder sb = new StringBuilder();
+        sb.append("hello");
+        sink(sb.toString());
+    }
+}
+"#;
+    let fir = parse_snippet(code);
+    let sym = fir.symbols.get("sb").expect("sb must be tracked");
+    assert!(sym.sanitized, "sb.append(literal) must leave sb sanitized");
+}
+
+#[test]
+fn insert_tainted_arg_marks_builder_tainted() {
+    let code = r#"
+class T {
+    void test(String raw) {
+        StringBuilder sb = new StringBuilder("prefix");
+        sb.insert(0, raw);
+        sink(sb.toString());
+    }
+}
+"#;
+    let fir = parse_snippet(code);
+    let sym = fir.symbols.get("sb").expect("sb must be tracked");
+    assert!(!sym.sanitized, "sb.insert(_, tainted) must mark sb as tainted");
+}
+
+#[test]
+fn tostring_after_tainted_append_propagates_taint() {
+    // After sb.append(raw), sb.toString() should inherit sb's tainted state.
+    let code = r#"
+class T {
+    void test(String raw) {
+        StringBuilder sb = new StringBuilder();
+        sb.append(raw);
+        String result = sb.toString();
+        sink(result);
+    }
+}
+"#;
+    let fir = parse_snippet(code);
+    let sym = fir.symbols.get("result").expect("result must be tracked");
+    assert!(!sym.sanitized, "result = sb.toString() where sb is tainted should be tainted");
+}
+
+#[test]
+fn string_format_with_tainted_arg_is_tainted() {
+    // String.format(template, userInput) — the result must be tainted.
+    let code = r#"
+class T {
+    void test(String raw) {
+        String result = String.format("Hello %s", raw);
+        sink(result);
+    }
+}
+"#;
+    let fir = parse_snippet(code);
+    let sym = fir.symbols.get("result").expect("result must be tracked");
+    assert!(!sym.sanitized, "String.format with tainted arg should be tainted");
+}
+
+#[test]
+fn string_format_with_literal_args_is_sanitized() {
+    let code = r#"
+class T {
+    void test() {
+        String result = String.format("Hello %s", "world");
+        sink(result);
+    }
+}
+"#;
+    let fir = parse_snippet(code);
+    if let Some(sym) = fir.symbols.get("result") {
+        assert!(sym.sanitized, "String.format with only literal args should be sanitized");
+    }
+}
+
+#[test]
+fn array_parameter_access_is_tainted() {
+    // args[] is an external parameter — args[0] should propagate taint.
+    let code = r#"
+class T {
+    public static void main(String[] args) {
+        String input = args[0];
+        sink(input);
+    }
+}
+"#;
+    let fir = parse_snippet(code);
+    // `input` gets its value from `args[0]`; args is a Param → input should be tainted
+    let sym = fir.symbols.get("input").expect("input must be tracked");
+    assert!(!sym.sanitized, "args[0] is user-controlled — input should be tainted");
+}
+
+#[test]
+fn static_utility_call_with_variable_arg_is_tainted() {
+    // Integer.toString(raw) — even a class-receiver call propagates taint from args.
+    let code = r#"
+class T {
+    void test(int raw) {
+        String result = Integer.toString(raw);
+        sink(result);
+    }
+}
+"#;
+    let fir = parse_snippet(code);
+    let sym = fir.symbols.get("result").expect("result must be tracked");
+    assert!(!sym.sanitized, "Integer.toString(tainted) must propagate taint");
+}
+
+// -------------------------------------------------------------------
+// End-to-end integration: common real-world taint patterns
+// -------------------------------------------------------------------
+
+#[test]
+fn taint_through_string_concat_to_sink() {
+    // Taint: request.getParameter → concat → sink
+    let code = r#"
+class T {
+    void handle(javax.servlet.http.HttpServletRequest req) {
+        String name = req.getParameter("name");
+        String msg = "Hello " + name + "!";
+        sink(msg);
+    }
+}
+"#;
+    let fir = parse_snippet(code);
+    // msg should inherit taint from name
+    let sym = fir.symbols.get("msg").expect("msg must be tracked");
+    assert!(!sym.sanitized, "string concat with tainted var must be tainted");
+}
+
+#[test]
+fn taint_chain_through_field_access_and_return() {
+    // Param → field → return should preserve taint
+    let code = r#"
+class T {
+    String value;
+    void set(String raw) {
+        this.value = raw;
+    }
+    String get() {
+        return this.value;
+    }
+}
+"#;
+    let fir = parse_snippet(code);
+    // this.value assigned from raw (param) should be tainted
+    let sym = fir.symbols.get("this.value").expect("this.value must be tracked");
+    assert!(!sym.sanitized, "this.value assigned from param must be tainted");
+}
+
+#[test]
+fn local_string_only_data_is_sanitized() {
+    // No external input — all literal data
+    let code = r#"
+class T {
+    void safe() {
+        String msg = "Hello " + "World";
+        sink(msg);
+    }
+}
+"#;
+    let fir = parse_snippet(code);
+    if let Some(sym) = fir.symbols.get("msg") {
+        assert!(sym.sanitized, "literal-only concatenation must be sanitized");
+    }
+}
+
+#[test]
+fn system_getenv_is_not_sanitized() {
+    // System.getenv() is a known source — it must NOT be auto-sanitized
+    // even though System is a class receiver and there are no variable args.
+    let code = r#"
+class T {
+    void run() {
+        String val = System.getenv("HOME");
+        sink(val);
+    }
+}
+"#;
+    let fir = parse_snippet(code);
+    let sym = fir.symbols.get("val").expect("val must be tracked");
+    assert!(!sym.sanitized, "System.getenv() is a taint source — must not be sanitized");
+}
+
+#[test]
+fn integer_parse_int_sanitizes_tainted_input() {
+    // Integer.parseInt is in the sanitizer catalog — converts string to int safely.
+    let code = r#"
+class T {
+    void run(String raw) {
+        int num = Integer.parseInt(raw);
+    }
+}
+"#;
+    let fir = parse_snippet(code);
+    // num should be sanitized since Integer.parseInt is in the catalog
+    if let Some(sym) = fir.symbols.get("num") {
+        assert!(sym.sanitized, "Integer.parseInt sanitizes the input");
+    }
+}
