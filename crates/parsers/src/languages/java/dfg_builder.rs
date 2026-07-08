@@ -2500,7 +2500,12 @@ fn build_dfg(
                             .iter()
                             .map(|name| resolve_alias(name, &fir.symbols))
                             .collect();
-                        if canonical_sources.iter().any(|canonical| {
+                        if canonical_sources.is_empty() {
+                            // No variable references — value is entirely literal/constant.
+                            if is_constant_expression(*value_node) {
+                                sanitized_value = true;
+                            }
+                        } else if canonical_sources.iter().any(|canonical| {
                             find_symbol(canonical, &fir.symbols)
                                 .map(|s| s.sanitized)
                                 .unwrap_or(false)

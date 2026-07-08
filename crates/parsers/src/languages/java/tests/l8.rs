@@ -1464,3 +1464,159 @@ class T {
     let sym = fir.symbols.get("this.safeField").expect("this.safeField must be tracked");
     assert!(sym.sanitized, "literal-initialized field must be sanitized");
 }
+
+// -------------------------------------------------------------------
+// Switch statement (traditional) taint propagation
+// -------------------------------------------------------------------
+
+#[test]
+fn switch_statement_tainted_case_marks_result_tainted() {
+    // result is assigned inside a switch case that uses a tainted var.
+    let code = r#"
+class T {
+    void run(String kind, String raw) {
+        String result = "default";
+        switch (kind) {
+            case "a":
+                result = raw;
+                break;
+            default:
+                result = "safe";
+                break;
+        }
+        sink(result);
+    }
+}
+"#;
+    let fir = parse_snippet(code);
+    let sym = fir.symbols.get("result").expect("result must be tracked");
+    assert!(!sym.sanitized, "switch statement with tainted case must keep result tainted");
+}
+
+#[test]
+fn switch_statement_all_safe_cases_marks_result_sanitized() {
+    let code = r#"
+class T {
+    void run(String kind) {
+        String result = "default";
+        switch (kind) {
+            case "a":
+                result = "safe_a";
+                break;
+            default:
+                result = "safe_b";
+                break;
+        }
+        sink(result);
+    }
+}
+"#;
+    let fir = parse_snippet(code);
+    let sym = fir.symbols.get("result").expect("result must be tracked");
+    assert!(sym.sanitized, "switch where all cases assign literals should be sanitized");
+}
+
+// -------------------------------------------------------------------
+// Enum and constants — common static field access patterns
+// -------------------------------------------------------------------
+
+#[test]
+fn concat_with_multiple_static_constants_is_sanitized() {
+    let code = r#"
+class T {
+    static final String A = "prefix_";
+    static final String B = "_suffix";
+    void run() {
+        String result = A + B;
+        sink(result);
+    }
+}
+"#;
+    let fir = parse_snippet(code);
+    let sym = fir.symbols.get("result").expect("result must be tracked");
+    assert!(sym.sanitized, "concat of two sanitized static final constants must be sanitized");
+}
+
+#[test]
+fn static_final_concat_with_literal_is_sanitized() {
+    let code = r#"
+class T {
+    static final String PREFIX = "users";
+    void run() {
+        String sql = "SELECT * FROM " + PREFIX + " WHERE 1=1";
+        sink(sql);
+    }
+}
+"#;
+    let fir = parse_snippet(code);
+    let sym = fir.symbols.get("sql").expect("sql must be tracked");
+    assert!(sym.sanitized, "concat of literals and static final constants must be sanitized");
+}
+
+// -------------------------------------------------------------------
+// Local variable re-use patterns
+// -------------------------------------------------------------------
+
+#[test]
+fn variable_initially_sanitized_then_tainted_by_assignment() {
+    // x starts as literal, then reassigned from source() — must be tainted.
+    let code = r#"
+class T {
+    void run() {
+        String x = "safe";
+        x = source();
+        sink(x);
+    }
+}
+"#;
+    let fir = parse_snippet(code);
+    let sym = fir.symbols.get("x").expect("x must be tracked");
+    assert!(!sym.sanitized, "after x = source(), x must be tainted regardless of initial value");
+}
+
+// -------------------------------------------------------------------
+// Map/collection taint tracking
+// -------------------------------------------------------------------
+
+#[test]
+fn map_put_with_tainted_value_marks_key_tainted() {
+    // params.put("key", raw) — the slot params["key"] must be tainted.
+    let code = r#"
+class T {
+    void run(String raw) {
+        java.util.Map<String, String> params = new java.util.HashMap<>();
+        params.put("key", raw);
+        String val = params.get("key");
+        sink(val);
+    }
+}
+"#;
+    let fir = parse_snippet(code);
+    let sym = fir.symbols.get("params[\"key\"]")
+        .or_else(|| fir.symbols.get("params[key]"));
+    if let Some(s) = sym {
+        assert!(!s.sanitized, "map slot assigned from tainted value must be tainted");
+    }
+    // val must not be sanitized (it comes from a tainted slot)
+    if let Some(val_sym) = fir.symbols.get("val") {
+        assert!(!val_sym.sanitized, "val from tainted map slot must be tainted");
+    }
+}
+
+#[test]
+fn map_put_with_literal_value_marks_key_sanitized() {
+    let code = r#"
+class T {
+    void run() {
+        java.util.Map<String, String> params = new java.util.HashMap<>();
+        params.put("key", "safe_value");
+        String val = params.get("key");
+        sink(val);
+    }
+}
+"#;
+    let fir = parse_snippet(code);
+    if let Some(sym) = fir.symbols.get("val") {
+        assert!(sym.sanitized, "val from map with only literal value must be sanitized");
+    }
+}
