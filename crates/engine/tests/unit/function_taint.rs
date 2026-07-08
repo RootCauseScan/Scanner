@@ -69,6 +69,7 @@ fn tainted_file() -> FileIR {
                 kind: DFNodeKind::Def,
                 sanitized: false,
                 branch: None,
+                ..Default::default()
             },
             DFNode {
                 id: 1,
@@ -76,6 +77,7 @@ fn tainted_file() -> FileIR {
                 kind: DFNodeKind::Use,
                 sanitized: false,
                 branch: None,
+                ..Default::default()
             },
             DFNode {
                 id: 2,
@@ -83,6 +85,7 @@ fn tainted_file() -> FileIR {
                 kind: DFNodeKind::Def,
                 sanitized: false,
                 branch: None,
+                ..Default::default()
             },
             DFNode {
                 id: 3,
@@ -90,6 +93,7 @@ fn tainted_file() -> FileIR {
                 kind: DFNodeKind::Use,
                 sanitized: false,
                 branch: None,
+                ..Default::default()
             },
         ],
         edges: vec![(0, 1), (2, 3)],
@@ -143,6 +147,7 @@ fn clean_file() -> FileIR {
                 kind: DFNodeKind::Def,
                 sanitized: false,
                 branch: None,
+                ..Default::default()
             },
             DFNode {
                 id: 1,
@@ -150,6 +155,7 @@ fn clean_file() -> FileIR {
                 kind: DFNodeKind::Use,
                 sanitized: false,
                 branch: None,
+                ..Default::default()
             },
         ],
         edges: vec![(0, 1)],
@@ -204,6 +210,7 @@ fn wrap_file() -> FileIR {
             kind: DFNodeKind::Def,
             sanitized: false,
             branch: None,
+            ..Default::default()
         }],
         edges: vec![],
         calls: vec![(10, 0)],
@@ -261,6 +268,7 @@ fn main_file() -> FileIR {
                 kind: DFNodeKind::Def,
                 sanitized: false,
                 branch: None,
+                ..Default::default()
             },
             DFNode {
                 id: 1,
@@ -268,6 +276,7 @@ fn main_file() -> FileIR {
                 kind: DFNodeKind::Use,
                 sanitized: false,
                 branch: None,
+                ..Default::default()
             },
         ],
         edges: vec![(0, 1)],
@@ -313,6 +322,7 @@ fn bad_call_file() -> FileIR {
             kind: DFNodeKind::Def,
             sanitized: true,
             branch: None,
+            ..Default::default()
         }],
         edges: vec![],
         calls: vec![],

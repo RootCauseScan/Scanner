@@ -45,6 +45,158 @@ fn java_default_catalog_symbols_are_registered() {
     ));
 }
 
+#[test]
+fn catalog_covers_spring_sources() {
+    assert!(catalog::is_source("java", "MultipartFile.getOriginalFilename"));
+    assert!(catalog::is_source("java", "MultipartFile.getInputStream"));
+    assert!(catalog::is_source("java", "MultipartFile.getBytes"));
+    assert!(catalog::is_source(
+        "java",
+        "org.springframework.web.multipart.MultipartFile.getOriginalFilename"
+    ));
+    assert!(catalog::is_source("java", "ServerRequest.queryParam"));
+    assert!(catalog::is_source("java", "ServerRequest.pathVariable"));
+    assert!(catalog::is_source("java", "System.getProperty"));
+    assert!(catalog::is_source("java", "java.lang.System.getProperty"));
+    assert!(catalog::is_source("java", "Scanner.nextLine"));
+    assert!(catalog::is_source("java", "BufferedReader.readLine"));
+    assert!(catalog::is_source(
+        "java",
+        "java.io.ObjectInputStream.readObject"
+    ));
+    assert!(catalog::is_source("java", "XMLDecoder.readObject"));
+}
+
+#[test]
+fn catalog_covers_sqli_sinks() {
+    assert!(catalog::is_sink("java", "Connection.prepareStatement"));
+    assert!(catalog::is_sink("java", "java.sql.Connection.prepareStatement"));
+    assert!(catalog::is_sink("java", "EntityManager.createNativeQuery"));
+    assert!(catalog::is_sink(
+        "java",
+        "jakarta.persistence.EntityManager.createNativeQuery"
+    ));
+    assert!(catalog::is_sink("java", "Session.createNativeQuery"));
+    assert!(catalog::is_sink("java", "org.hibernate.Session.createNativeQuery"));
+    assert!(catalog::is_sink("java", "Statement.addBatch"));
+}
+
+#[test]
+fn catalog_covers_jndi_sinks() {
+    assert!(catalog::is_sink("java", "InitialContext.lookup"));
+    assert!(catalog::is_sink("java", "javax.naming.InitialContext.lookup"));
+    assert!(catalog::is_sink("java", "javax.naming.Context.lookup"));
+    assert!(catalog::is_sink("java", "JndiTemplate.lookup"));
+    assert!(catalog::is_sink(
+        "java",
+        "org.springframework.jndi.JndiTemplate.lookup"
+    ));
+}
+
+#[test]
+fn catalog_covers_path_traversal_sinks() {
+    assert!(catalog::is_sink("java", "FileInputStream"));
+    assert!(catalog::is_sink("java", "java.io.FileInputStream"));
+    assert!(catalog::is_sink("java", "FileOutputStream"));
+    assert!(catalog::is_sink("java", "Files.readAllBytes"));
+    assert!(catalog::is_sink("java", "java.nio.file.Files.readAllBytes"));
+    assert!(catalog::is_sink("java", "Files.write"));
+    assert!(catalog::is_sink("java", "Files.delete"));
+    assert!(catalog::is_sink("java", "Paths.get"));
+    assert!(catalog::is_sink("java", "java.nio.file.Paths.get"));
+}
+
+#[test]
+fn catalog_covers_ssrf_sinks() {
+    assert!(catalog::is_sink("java", "URL.openConnection"));
+    assert!(catalog::is_sink("java", "java.net.URL.openConnection"));
+    assert!(catalog::is_sink("java", "URL.openStream"));
+    assert!(catalog::is_sink("java", "RestTemplate.getForObject"));
+    assert!(catalog::is_sink("java", "RestTemplate.postForObject"));
+    assert!(catalog::is_sink("java", "RestTemplate.exchange"));
+    assert!(catalog::is_sink(
+        "java",
+        "org.springframework.web.client.RestTemplate.exchange"
+    ));
+    assert!(catalog::is_sink("java", "WebClient.get"));
+    assert!(catalog::is_sink("java", "WebClient.post"));
+}
+
+#[test]
+fn catalog_covers_xxe_sinks() {
+    assert!(catalog::is_sink("java", "DocumentBuilder.parse"));
+    assert!(catalog::is_sink("java", "javax.xml.parsers.DocumentBuilder.parse"));
+    assert!(catalog::is_sink("java", "SAXParser.parse"));
+    assert!(catalog::is_sink("java", "XMLReader.parse"));
+    assert!(catalog::is_sink("java", "Transformer.transform"));
+    assert!(catalog::is_sink("java", "SchemaFactory.newSchema"));
+}
+
+#[test]
+fn catalog_covers_log_injection_sinks() {
+    assert!(catalog::is_sink("java", "Logger.info"));
+    assert!(catalog::is_sink("java", "Logger.warn"));
+    assert!(catalog::is_sink("java", "Logger.error"));
+    assert!(catalog::is_sink("java", "org.slf4j.Logger.info"));
+    assert!(catalog::is_sink("java", "org.apache.logging.log4j.Logger.error"));
+    assert!(catalog::is_sink("java", "org.apache.logging.log4j.Logger.fatal"));
+}
+
+#[test]
+fn catalog_covers_el_injection_sinks() {
+    assert!(catalog::is_sink("java", "ScriptEngine.eval"));
+    assert!(catalog::is_sink("java", "javax.script.ScriptEngine.eval"));
+    assert!(catalog::is_sink("java", "ExpressionParser.parseExpression"));
+    assert!(catalog::is_sink(
+        "java",
+        "org.springframework.expression.ExpressionParser.parseExpression"
+    ));
+}
+
+#[test]
+fn catalog_covers_extended_sanitizers() {
+    assert!(catalog::is_sanitizer(
+        "java",
+        "StringEscapeUtils.escapeHtml4"
+    ));
+    assert!(catalog::is_sanitizer(
+        "java",
+        "org.apache.commons.text.StringEscapeUtils.escapeHtml4"
+    ));
+    assert!(catalog::is_sanitizer(
+        "java",
+        "StringEscapeUtils.escapeXml11"
+    ));
+    assert!(catalog::is_sanitizer(
+        "java",
+        "org.owasp.encoder.Encode.forHtmlAttribute"
+    ));
+    assert!(catalog::is_sanitizer(
+        "java",
+        "org.owasp.encoder.Encode.forXml"
+    ));
+    assert!(catalog::is_sanitizer(
+        "java",
+        "ESAPI.encoder().encodeForSQL"
+    ));
+    assert!(catalog::is_sanitizer(
+        "java",
+        "org.owasp.esapi.ESAPI.encoder().encodeForHTML"
+    ));
+    assert!(catalog::is_sanitizer(
+        "java",
+        "HtmlUtils.htmlEscape"
+    ));
+    assert!(catalog::is_sanitizer(
+        "java",
+        "org.springframework.web.util.HtmlUtils.htmlEscape"
+    ));
+    assert!(catalog::is_sanitizer("java", "PreparedStatement.setString"));
+    assert!(catalog::is_sanitizer("java", "Integer.parseInt"));
+    assert!(catalog::is_sanitizer("java", "UUID.fromString"));
+    assert!(catalog::is_sanitizer("java", "java.util.UUID.fromString"));
+}
+
 // Sanitizer call should propagate clean data through aliases.
 #[test]
 fn builds_ir_and_dfg_with_sanitizer() {

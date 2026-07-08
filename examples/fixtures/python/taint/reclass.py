@@ -1,3 +1,3 @@
 user = source()
-user = clean(user)
+user = partial_clean(user)
 sink(user)

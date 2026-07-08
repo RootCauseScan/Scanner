@@ -51,7 +51,7 @@ fn walk_ast(
     *counter += 1;
     let kind = to_camel(node.kind());
     let mut value = serde_json::Value::Null;
-    if kind == "MethodDeclaration" {
+    if kind == "MethodDeclaration" || kind == "ConstructorDeclaration" {
         if let Some(name) = node.child_by_field_name("name") {
             if let Ok(n) = name.utf8_text(src.as_bytes()) {
                 value = serde_json::json!(n);

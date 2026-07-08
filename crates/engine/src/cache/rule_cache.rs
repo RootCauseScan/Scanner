@@ -11,6 +11,7 @@ pub type RuleCacheValue = Vec<Finding>;
 pub struct RuleCacheKey {
     pub file: PathBuf,
     pub rule_id: String,
+    pub content_hash: String,
 }
 
 pub struct RuleCache {

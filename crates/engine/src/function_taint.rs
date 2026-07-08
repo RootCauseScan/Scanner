@@ -51,33 +51,41 @@ fn propagate_returns() -> Result<()> {
     let mut changed = true;
     while changed {
         changed = false;
-        let graph = graph().read().map_err(|_| anyhow!("lock poisoned"))?;
-        let names = id_map().read().map_err(|_| anyhow!("lock poisoned"))?;
-        let mut taints = map().read().map_err(|_| anyhow!("lock poisoned"))?;
-        for (caller, callees) in graph.iter() {
-            let Some(caller_name) = names.get(caller).cloned() else {
-                continue;
-            };
-            for callee in callees {
-                let Some(callee_name) = names.get(callee) else {
+        let pending: Vec<String> = {
+            let graph = graph().read().map_err(|_| anyhow!("lock poisoned"))?;
+            let names = id_map().read().map_err(|_| anyhow!("lock poisoned"))?;
+            let taints = map().read().map_err(|_| anyhow!("lock poisoned"))?;
+            let mut pending = Vec::new();
+            for (caller, callees) in graph.iter() {
+                let Some(caller_name) = names.get(caller) else {
                     continue;
                 };
-                if taints.get(callee_name).is_some_and(|t| t.tainted_return) {
-                    drop(taints);
-                    let mut m = map().write().map_err(|_| anyhow!("lock poisoned"))?;
-                    let entry = m
-                        .entry(caller_name.clone())
-                        .or_insert_with(|| FunctionTaint {
-                            name: caller_name.clone(),
-                            tainted_args: HashSet::new(),
-                            tainted_return: false,
-                        });
-                    if !entry.tainted_return {
-                        entry.tainted_return = true;
-                        changed = true;
+                for callee in callees {
+                    let Some(callee_name) = names.get(callee) else {
+                        continue;
+                    };
+                    if taints.get(callee_name).is_some_and(|t| t.tainted_return) {
+                        let already = taints
+                            .get(caller_name)
+                            .is_some_and(|t| t.tainted_return);
+                        if !already {
+                            pending.push(caller_name.clone());
+                        }
                     }
-                    taints = map().read().map_err(|_| anyhow!("lock poisoned"))?;
                 }
+            }
+            pending
+        };
+        if !pending.is_empty() {
+            changed = true;
+            let mut m = map().write().map_err(|_| anyhow!("lock poisoned"))?;
+            for caller_name in pending {
+                let entry = m.entry(caller_name.clone()).or_insert_with(|| FunctionTaint {
+                    name: caller_name,
+                    tainted_args: HashSet::new(),
+                    tainted_return: false,
+                });
+                entry.tainted_return = true;
             }
         }
     }
@@ -167,7 +175,7 @@ fn tainted_vars(file: &FileIR) -> HashSet<String> {
     out
 }
 
-pub(crate) fn parse_call(code: &str) -> Option<(String, Vec<String>)> {
+pub fn parse_call(code: &str) -> Option<(String, Vec<String>)> {
     let call = code.trim();
     let mut open = None;
     let mut paren = 0usize;
@@ -225,9 +233,10 @@ fn split_args(s: &str) -> Vec<String> {
     out
 }
 
+
 fn walk(
     node: &AstNode,
-    src: &str,
+    lines: &[&str],
     tainted: &HashSet<String>,
     current_fn: Option<usize>,
     fn_ids: &HashMap<String, usize>,
@@ -238,7 +247,7 @@ fn walk(
     }
     if node.kind == "CallExpression" || node.kind == "Call" {
         let line = node.meta.line;
-        let code = src.lines().nth(line - 1).unwrap_or("").trim();
+        let code = lines.get(line.saturating_sub(1)).copied().unwrap_or("").trim();
         let (lhs, call_part) = if let Some(eq) = code.find('=') {
             (code[..eq].trim(), code[eq + 1..].trim())
         } else {
@@ -259,7 +268,7 @@ fn walk(
         }
     }
     for c in &node.children {
-        walk(c, src, tainted, cur_fn, fn_ids)?;
+        walk(c, lines, tainted, cur_fn, fn_ids)?;
     }
     Ok(())
 }
@@ -282,6 +291,7 @@ pub fn record_function_taints(file: &FileIR) -> Result<()> {
         return Ok(());
     }; // no AST available
     let src = file.source.as_deref().unwrap_or("");
+    let lines: Vec<&str> = src.lines().collect();
 
     let mut fn_ids = HashMap::new();
     for n in &ast.nodes {
@@ -290,7 +300,7 @@ pub fn record_function_taints(file: &FileIR) -> Result<()> {
 
     let tainted = tainted_vars(file);
     for n in &ast.nodes {
-        walk(n, src, &tainted, None, &fn_ids)?;
+        walk(n, &lines, &tainted, None, &fn_ids)?;
     }
     propagate_returns()?;
     Ok(())

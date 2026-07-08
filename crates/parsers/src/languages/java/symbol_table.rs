@@ -57,38 +57,50 @@ fn collect_static_members(target: &FileIR) -> Vec<String> {
 }
 
 fn propagate_sanitized(fir: &mut FileIR) {
-    if let Some(dfg) = &mut fir.dfg {
-        let mut queue: Vec<usize> = dfg
-            .nodes
-            .iter()
-            .filter(|n| n.sanitized)
-            .map(|n| n.id)
-            .collect();
-        let mut visited = HashSet::new();
-        let edges = dfg.edges.clone();
-        while let Some(id) = queue.pop() {
-            if !visited.insert(id) {
+    let Some(dfg) = &mut fir.dfg else { return };
+
+    // Build stable-id → vector-index map (dfg.nodes[id] is WRONG: id is a hash, not an index)
+    let id_to_idx: HashMap<usize, usize> = dfg.nodes.iter().enumerate()
+        .map(|(i, n)| (n.id, i))
+        .collect();
+
+    // Build outgoing-edge adjacency for O(E) propagation instead of O(V*E)
+    let mut adj: HashMap<usize, Vec<usize>> = HashMap::new();
+    for &(src, dst) in &dfg.edges {
+        adj.entry(src).or_default().push(dst);
+    }
+
+    let mut queue: Vec<usize> = dfg.nodes.iter()
+        .filter(|n| n.sanitized)
+        .map(|n| n.id)
+        .collect();
+    let mut visited = HashSet::new();
+
+    while let Some(id) = queue.pop() {
+        if !visited.insert(id) {
+            continue;
+        }
+        let Some(dsts) = adj.get(&id) else { continue };
+        let dsts: Vec<usize> = dsts.clone();
+        for dst in dsts {
+            let Some(&idx) = id_to_idx.get(&dst) else { continue };
+            let skip = {
+                let node = &dfg.nodes[idx];
+                (matches!(node.kind, ir::DFNodeKind::Assign) && node.branch.is_none())
+                    || node.sanitized
+            };
+            if skip {
                 continue;
             }
-            for &(src, dst) in &edges {
-                if src == id {
-                    if let Some(node) = dfg.nodes.get_mut(dst) {
-                        if matches!(node.kind, ir::DFNodeKind::Assign) && node.branch.is_none() {
-                            continue;
-                        }
-                        if !node.sanitized {
-                            node.sanitized = true;
-                            let canonical = resolve_alias(&node.name, &fir.symbols);
-                            if let Some(sym) = fir.symbols.get_mut(&canonical) {
-                                sym.sanitized = true;
-                            } else if let Some(sym) = fir.symbols.get_mut(&node.name) {
-                                sym.sanitized = true;
-                            }
-                            queue.push(dst);
-                        }
-                    }
-                }
+            dfg.nodes[idx].sanitized = true;
+            let name = dfg.nodes[idx].name.clone();
+            let canonical = resolve_alias(&name, &fir.symbols);
+            if let Some(sym) = fir.symbols.get_mut(&canonical) {
+                sym.sanitized = true;
+            } else if let Some(sym) = fir.symbols.get_mut(&name) {
+                sym.sanitized = true;
             }
+            queue.push(dst);
         }
     }
 }
@@ -133,7 +145,7 @@ pub fn link_imports(modules: &mut HashMap<String, FileIR>) {
             .collect();
 
         let mut actions: Vec<ImportAction> = Vec::new();
-        let mut sanitized_aliases: Vec<String> = Vec::new();
+        let mut sanitized_aliases: HashSet<String> = HashSet::new();
 
         for (key, path, kind) in import_entries {
             match kind {
@@ -150,8 +162,8 @@ pub fn link_imports(modules: &mut HashMap<String, FileIR>) {
                         target: path.clone(),
                         kind: ImportKind::Static,
                     });
-                    if is_symbol_sanitized(&snapshot, &path) && !sanitized_aliases.contains(&key) {
-                        sanitized_aliases.push(key.clone());
+                    if is_symbol_sanitized(&snapshot, &path) {
+                        sanitized_aliases.insert(key.clone());
                     }
                 }
                 ImportKind::Wildcard => {
@@ -180,10 +192,8 @@ pub fn link_imports(modules: &mut HashMap<String, FileIR>) {
                                 target: full.clone(),
                                 kind: ImportKind::Static,
                             });
-                            if is_symbol_sanitized(&snapshot, &full)
-                                && !sanitized_aliases.contains(&member)
-                            {
-                                sanitized_aliases.push(member);
+                            if is_symbol_sanitized(&snapshot, &full) {
+                                sanitized_aliases.insert(member);
                             }
                         }
                     }
@@ -259,7 +269,12 @@ pub fn link_imports(modules: &mut HashMap<String, FileIR>) {
             }
 
             if let Some(dfg) = &mut fir_mut.dfg {
-                let existing_edges = dfg.edges.clone();
+                // Build id→idx map once; dfg.nodes[id] is wrong since id is a hash, not an index
+                let id_to_idx: HashMap<usize, usize> = dfg.nodes.iter().enumerate()
+                    .map(|(i, n)| (n.id, i))
+                    .collect();
+                // Build edge set for O(1) dedup instead of two O(n) scans per node
+                let mut edge_set: HashSet<(usize, usize)> = dfg.edges.iter().cloned().collect();
                 let nodes_snapshot = dfg.nodes.clone();
                 for node in nodes_snapshot {
                     let canonical = resolve_alias(&node.name, &fir_mut.symbols);
@@ -273,22 +288,14 @@ pub fn link_imports(modules: &mut HashMap<String, FileIR>) {
                                 .is_some(),
                             _ => false,
                         };
-                        if should_link
-                            && !existing_edges
-                                .iter()
-                                .any(|&(src, dst)| src == def_id && dst == node.id)
-                            && !dfg
-                                .edges
-                                .iter()
-                                .any(|&(src, dst)| src == def_id && dst == node.id)
-                        {
+                        if should_link && edge_set.insert((def_id, node.id)) {
                             dfg.edges.push((def_id, node.id));
                         }
                         if should_link {
                             if let Some(sym) = fir_mut.symbols.get(&canonical) {
                                 if sym.sanitized {
-                                    if let Some(local_node) = dfg.nodes.get_mut(node.id) {
-                                        local_node.sanitized = true;
+                                    if let Some(&idx) = id_to_idx.get(&node.id) {
+                                        dfg.nodes[idx].sanitized = true;
                                     }
                                     if let Some(local_sym) = fir_mut.symbols.get_mut(&node.name) {
                                         local_sym.sanitized = true;

@@ -16,26 +16,42 @@ fn parse_fixture(file: &str) -> FileIR {
     fir
 }
 
-// Argument flows through calls and sanitized data propagates.
+// good.java: src = id(src); src = escapeHtml(src); sink(src)
+// After inter-procedural linking: Param(p) receives src; src ends up sanitized.
 #[test]
 fn l4_args_y_sanitizacion() {
     let fir = parse_fixture("good.java");
-    let dfg = fir.dfg.expect("dfg");
-    let src_def = dfg
+    let dfg = fir.dfg.as_ref().expect("dfg");
+
+    // There must be Param(p) in the id() method
+    let param_p_id = dfg
         .nodes
         .iter()
-        .find(|n| n.name == "src" && matches!(n.kind, DFNodeKind::Def))
+        .find(|n| n.name == "p" && matches!(n.kind, DFNodeKind::Param))
         .map(|n| n.id)
-        .expect("src def");
-    let tmp_def = dfg
+        .expect("Param(p) in id() must exist");
+
+    // There must be at least one Def node named "src"
+    let src_def_ids: Vec<usize> = dfg
         .nodes
         .iter()
-        .find(|n| n.name == "tmp" && matches!(n.kind, DFNodeKind::Def))
+        .filter(|n| n.name == "src" && matches!(n.kind, DFNodeKind::Def))
         .map(|n| n.id)
-        .expect("tmp def");
-    assert!(dfg.edges.contains(&(src_def, tmp_def)));
-    let sym = fir.symbols.get("s").expect("s symbol");
-    assert!(sym.sanitized);
+        .collect();
+    assert!(!src_def_ids.is_empty(), "at least one Def(src) must exist");
+
+    // Some Def(src) → Param(p) edge must exist via call_args inter-procedural linking
+    let has_interproc_edge = src_def_ids
+        .iter()
+        .any(|&did| dfg.edges.contains(&(did, param_p_id)));
+    assert!(
+        has_interproc_edge,
+        "inter-procedural edge from a Def(src) to Param(p) must exist"
+    );
+
+    // After src = escapeHtml(src), src must be sanitized in the symbol table
+    let sym = fir.symbols.get("src").expect("src symbol must exist");
+    assert!(sym.sanitized, "src must be sanitized after escapeHtml reassignment");
 }
 
 // Without sanitizer, taint remains.

@@ -104,9 +104,8 @@ impl AnyRegex {
             Self::Pcre2(r) => match r.captures(text.as_bytes()) {
                 Ok(Some(caps)) => Some(AnyCaptures {
                     get_fn: Box::new(move |idx| {
-                        caps.get(idx).map(|m| {
-                            let text_str = std::str::from_utf8(m.as_bytes()).unwrap_or("");
-                            AnyMatch { text: text_str }
+                        caps.get(idx).and_then(|m| {
+                            std::str::from_utf8(m.as_bytes()).ok().map(|text_str| AnyMatch { text: text_str })
                         })
                     }),
                 }),

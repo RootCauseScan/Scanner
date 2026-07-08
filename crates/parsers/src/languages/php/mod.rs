@@ -262,6 +262,7 @@ pub fn parse_php(content: &str, fir: &mut FileIR) -> Result<()> {
                         kind: DFNodeKind::Assign,
                         sanitized: sanitized_all,
                         branch: None,
+                    ..Default::default()
                     });
                     for d in defs {
                         dfg.edges.push((d, id));
@@ -304,6 +305,7 @@ pub fn parse_php(content: &str, fir: &mut FileIR) -> Result<()> {
                 kind: DFNodeKind::Branch,
                 sanitized: false,
                 branch: branch_stack.last().copied(),
+            ..Default::default()
             });
             if let Some(cond) = node.child_by_field_name("condition") {
                 build_ir(
@@ -382,6 +384,7 @@ pub fn parse_php(content: &str, fir: &mut FileIR) -> Result<()> {
                     kind: DFNodeKind::Branch,
                     sanitized: false,
                     branch: branch_stack.last().copied(),
+                ..Default::default()
                 });
             }
             if let Some(cond) = node.child_by_field_name("condition") {
@@ -403,6 +406,7 @@ pub fn parse_php(content: &str, fir: &mut FileIR) -> Result<()> {
                             kind: DFNodeKind::Use,
                             sanitized,
                             branch: branch_stack.last().copied(),
+                        ..Default::default()
                         });
                         if let Some(def) = fir.symbols.get(&canonical).and_then(|s| s.def) {
                             dfg.edges.push((def, id));
@@ -450,6 +454,7 @@ pub fn parse_php(content: &str, fir: &mut FileIR) -> Result<()> {
                     kind: DFNodeKind::Branch,
                     sanitized: false,
                     branch: branch_stack.last().copied(),
+                ..Default::default()
                 });
                 nid
             };
@@ -485,6 +490,7 @@ pub fn parse_php(content: &str, fir: &mut FileIR) -> Result<()> {
                         kind: DFNodeKind::Use,
                         sanitized,
                         branch: branch_stack.last().copied(),
+                    ..Default::default()
                     });
                     if let Some(def) = fir.symbols.get(&canonical).and_then(|s| s.def) {
                         dfg.edges.push((def, id));
@@ -551,6 +557,7 @@ pub fn parse_php(content: &str, fir: &mut FileIR) -> Result<()> {
                         kind: DFNodeKind::Def,
                         sanitized: false,
                         branch: branch_stack.last().copied(),
+                    ..Default::default()
                     });
                     fn_ids.insert(fname.to_string(), id);
                     if let Some(params) = node.child_by_field_name("parameters") {
@@ -567,6 +574,7 @@ pub fn parse_php(content: &str, fir: &mut FileIR) -> Result<()> {
                                     kind: DFNodeKind::Param,
                                     sanitized: false,
                                     branch: branch_stack.last().copied(),
+                                ..Default::default()
                                 });
                                 fn_params.entry(id).or_default().push(pid);
                                 fir.symbols.insert(
@@ -682,6 +690,7 @@ pub fn parse_php(content: &str, fir: &mut FileIR) -> Result<()> {
                         kind: DFNodeKind::Use,
                         sanitized,
                         branch: branch_stack.last().copied(),
+                    ..Default::default()
                     });
                     if let Some(def) = fir.symbols.get(&canonical).and_then(|s| s.def) {
                         dfg.edges.push((def, id));
@@ -713,6 +722,7 @@ pub fn parse_php(content: &str, fir: &mut FileIR) -> Result<()> {
                                 kind: DFNodeKind::Def,
                                 sanitized: false,
                                 branch: branch_stack.last().copied(),
+                            ..Default::default()
                             });
                             fir.symbols.insert(
                                 name.to_string(),
@@ -784,6 +794,7 @@ pub fn parse_php(content: &str, fir: &mut FileIR) -> Result<()> {
                                         kind: DFNodeKind::Def,
                                         sanitized: false,
                                         branch: branch_stack.last().copied(),
+                                    ..Default::default()
                                     });
                                     fir.symbols.insert(
                                         v.clone(),
@@ -840,12 +851,18 @@ pub fn parse_php(content: &str, fir: &mut FileIR) -> Result<()> {
                                 kind: DFNodeKind::Def,
                                 sanitized,
                                 branch: branch_stack.last().copied(),
+                            ..Default::default()
                             });
                             for src_id in sources {
                                 dfg.edges.push((src_id, id));
                             }
                             // Create Use nodes for vars on RHS so taint can flow to a sink (e.g. "SELECT" . $id)
+                            // Skip superglobals — their Def node already represents the taint root;
+                            // adding a Use here creates a false sink in the middle of the assignment.
                             for v in &rhs_vars {
+                                if SUPERGLOBALS.contains(&v.as_str()) {
+                                    continue;
+                                }
                                 if let Some(sym) = fir.symbols.get(v) {
                                     if let Some(def_id) = sym.def {
                                         let use_id = dfg.nodes.len();
@@ -855,6 +872,7 @@ pub fn parse_php(content: &str, fir: &mut FileIR) -> Result<()> {
                                             kind: DFNodeKind::Use,
                                             sanitized: sym.sanitized,
                                             branch: branch_stack.last().copied(),
+                                        ..Default::default()
                                         });
                                         dfg.edges.push((def_id, use_id));
                                     }
@@ -897,6 +915,7 @@ pub fn parse_php(content: &str, fir: &mut FileIR) -> Result<()> {
                         kind: DFNodeKind::Return,
                         sanitized,
                         branch: branch_stack.last().copied(),
+                    ..Default::default()
                     });
                     fir.symbols.entry(v.clone()).or_insert_with(|| Symbol {
                         name: v.clone(),
@@ -943,6 +962,7 @@ pub fn parse_php(content: &str, fir: &mut FileIR) -> Result<()> {
                             kind: DFNodeKind::Def,
                             sanitized: false,
                             branch: branch_stack.last().copied(),
+                        ..Default::default()
                         });
                         fir.push(IRNode {
                             id: 0,
@@ -978,6 +998,7 @@ pub fn parse_php(content: &str, fir: &mut FileIR) -> Result<()> {
                         kind: DFNodeKind::Use,
                         sanitized,
                         branch: branch_stack.last().copied(),
+                    ..Default::default()
                     });
                     if let Some(def) = fir.symbols.get(&canonical).and_then(|s| s.def) {
                         dfg.edges.push((def, id));

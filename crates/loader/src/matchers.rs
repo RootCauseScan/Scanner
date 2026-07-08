@@ -12,17 +12,32 @@ pub struct Query {
 
 pub type TaintPattern = patterns::TaintPattern<AnyRegex>;
 
+/// One independent matching group within a TextRegexMulti rule.
+///
+/// A SubMatcher's `inside` guard only blocks its own `allow` patterns, not
+/// patterns in sibling SubMatchers. This preserves Semgrep semantics where a
+/// `pattern-inside` nested inside a `patterns:` block only applies to that
+/// block's alternatives, not to the whole rule.
+#[derive(Debug, Clone)]
+pub struct SubMatcher {
+    pub allow: Vec<(AnyRegex, String)>,
+    pub deny: Option<AnyRegex>,
+    pub inside: Vec<AnyRegex>,
+    pub not_inside: Vec<AnyRegex>,
+}
+
 #[derive(Debug, Clone)]
 /// Representation of how a rule matches against inputs.
 pub enum MatcherKind {
     /// Regex search in plain text.
     TextRegex(AnyRegex, String /*scope/path*/),
-    /// Multiple allow/deny expressions evaluated in the same file.
+    /// Multiple allow/deny expressions grouped into independent sub-matchers.
+    ///
+    /// Each SubMatcher has its own inside/not_inside guards so that
+    /// `pattern-inside` from a nested `patterns:` block does not accidentally
+    /// block sibling alternatives that don't require that context.
     TextRegexMulti {
-        allow: Vec<(AnyRegex, String)>,
-        deny: Option<AnyRegex>,
-        inside: Vec<AnyRegex>,
-        not_inside: Vec<AnyRegex>,
+        subs: Vec<SubMatcher>,
     },
     /// Exact comparison of a JSON value in a path.
     JsonPathEq(String, JsonValue),

@@ -6,11 +6,13 @@ expression: dfg.to_json().unwrap()
 {
   "nodes": [
     {
-      "id": 8321675576559263580,
+      "id": 9903207435854589922,
       "name": "expr",
       "kind": "Param",
       "sanitized": false,
-      "branch": null
+      "branch": null,
+      "line": 0,
+      "block_id": null
     }
   ],
   "edges": [],

@@ -342,17 +342,9 @@ pub struct FileSummary {
 fn matcher_summary(rule: &CompiledRule) -> String {
     match &rule.matcher {
         MatcherKind::TextRegex(_, pattern) => format!("TextRegex pattern: {}", pattern),
-        MatcherKind::TextRegexMulti {
-            allow,
-            deny,
-            inside,
-            not_inside,
-        } => format!(
-            "TextRegexMulti allow={} deny={} inside={} not_inside={}",
-            allow.len(),
-            deny.as_ref().map(|_| "yes").unwrap_or("no"),
-            inside.len(),
-            not_inside.len()
+        MatcherKind::TextRegexMulti { subs } => format!(
+            "TextRegexMulti subs={}",
+            subs.len()
         ),
         MatcherKind::JsonPathEq(path, value) => {
             let val = truncate(&serde_json::to_string(value).unwrap_or_default(), 80);

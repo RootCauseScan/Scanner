@@ -49,15 +49,16 @@ fn caches_patterns() {
 // Evicts the oldest pattern when the limit is exceeded.
 #[test]
 fn evicts_oldest_pattern() {
-    reset_path_regex_cache();
+    set_path_regex_cache_capacity(3);
     path_matches("a*", "ab");
     path_matches("b*", "bb");
     path_matches("c*", "cc");
-    assert_eq!(path_regex_cache_size(), PATH_REGEX_CACHE_CAPACITY);
+    assert_eq!(path_regex_cache_size(), 3);
     path_matches("d*", "dd");
-    assert_eq!(path_regex_cache_size(), PATH_REGEX_CACHE_CAPACITY);
+    assert_eq!(path_regex_cache_size(), 3);
     assert!(!path_regex_cache_contains("a*"));
     assert!(path_regex_cache_contains("b*"));
     assert!(path_regex_cache_contains("c*"));
     assert!(path_regex_cache_contains("d*"));
+    set_path_regex_cache_capacity(PATH_REGEX_CACHE_CAPACITY);
 }

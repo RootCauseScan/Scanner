@@ -108,6 +108,7 @@ pub(super) fn build_dfg(
                         kind: DFNodeKind::Def,
                         sanitized: false,
                         branch: branch_stack.last().copied(),
+                        ..Default::default()
                     });
                     fn_ids.insert(fname.to_string(), id);
                     // track `unsafe fn` declarations
@@ -121,6 +122,7 @@ pub(super) fn build_dfg(
                                 kind: DFNodeKind::Use,
                                 sanitized: false,
                                 branch: branch_stack.last().copied(),
+                        ..Default::default()
                             });
                             dfg.edges.push((id, uid));
                             break;
@@ -146,6 +148,7 @@ pub(super) fn build_dfg(
                                             kind: DFNodeKind::Param,
                                             sanitized: false,
                                             branch: branch_stack.last().copied(),
+                        ..Default::default()
                                         });
                                         fn_params.entry(id).or_default().push(pid);
                                         fir.symbols.insert(
@@ -205,6 +208,7 @@ pub(super) fn build_dfg(
                 kind: DFNodeKind::Branch,
                 sanitized: false,
                 branch: branch_stack.last().copied(),
+                        ..Default::default()
             });
             if let Some(&parent) = control.last() {
                 dfg.edges.push((parent, id));
@@ -318,6 +322,7 @@ pub(super) fn build_dfg(
                 kind: DFNodeKind::Branch,
                 sanitized: false,
                 branch: branch_stack.last().copied(),
+                        ..Default::default()
             });
             if let Some(&parent) = control.last() {
                 dfg.edges.push((parent, id));
@@ -409,6 +414,7 @@ pub(super) fn build_dfg(
                 kind: DFNodeKind::Branch,
                 sanitized: false,
                 branch: branch_stack.last().copied(),
+                        ..Default::default()
             });
             if let Some(&parent) = control.last() {
                 dfg.edges.push((parent, id));
@@ -432,6 +438,7 @@ pub(super) fn build_dfg(
                                 kind: DFNodeKind::Def,
                                 sanitized: false,
                                 branch: branch_stack.last().copied(),
+                        ..Default::default()
                             });
                             fir.symbols.insert(
                                 name.to_string(),
@@ -523,6 +530,7 @@ pub(super) fn build_dfg(
                 kind: DFNodeKind::Branch,
                 sanitized: false,
                 branch: branch_stack.last().copied(),
+                        ..Default::default()
             });
             if let Some(&parent) = control.last() {
                 dfg.edges.push((parent, id));
@@ -614,6 +622,7 @@ pub(super) fn build_dfg(
                 kind: DFNodeKind::Branch,
                 sanitized: false,
                 branch: branch_stack.last().copied(),
+                        ..Default::default()
             });
             if let Some(&parent) = control.last() {
                 dfg.edges.push((parent, id));
@@ -788,6 +797,7 @@ pub(super) fn build_dfg(
                             kind: kind.clone(),
                             sanitized: false,
                             branch: branch_stack.last().copied(),
+                        ..Default::default()
                         });
                         if let Some(init) = node.child_by_field_name("value") {
                             if init.kind() == "identifier" {
@@ -960,6 +970,7 @@ pub(super) fn build_dfg(
                             kind: DFNodeKind::Assign,
                             sanitized: false,
                             branch: branch_stack.last().copied(),
+                        ..Default::default()
                         });
                         if let Some(sym) = fir.symbols.get(&name).and_then(|s| s.def) {
                             dfg.edges.push((sym, id));
@@ -1176,6 +1187,7 @@ pub(super) fn build_dfg(
                                     kind: DFNodeKind::Use,
                                     sanitized: false,
                                     branch: branch_stack.last().copied(),
+                        ..Default::default()
                                 });
                                 if let Some(sym) = fir.symbols.get(&var).and_then(|s| s.def) {
                                     dfg.edges.push((sym, id));
@@ -1281,6 +1293,7 @@ pub(super) fn build_dfg(
                                             kind: DFNodeKind::Use,
                                             sanitized: false,
                                             branch: branch_stack.last().copied(),
+                        ..Default::default()
                                         });
                                         if let Some(sym) = fir.symbols.get(var).and_then(|s| s.def)
                                         {
@@ -1316,6 +1329,7 @@ pub(super) fn build_dfg(
                 kind: DFNodeKind::Use,
                 sanitized: false,
                 branch: branch_stack.last().copied(),
+                        ..Default::default()
             });
             if let Some(&parent) = control.last() {
                 dfg.edges.push((parent, id));
@@ -1352,6 +1366,7 @@ pub(super) fn build_dfg(
                     kind: DFNodeKind::Use,
                     sanitized: false,
                     branch: branch_stack.last().copied(),
+                        ..Default::default()
                 });
                 if let Some(&parent) = control.last() {
                     dfg.edges.push((parent, id));
@@ -1370,6 +1385,7 @@ pub(super) fn build_dfg(
                             kind: DFNodeKind::Return,
                             sanitized: false,
                             branch: branch_stack.last().copied(),
+                        ..Default::default()
                         });
                         if let Some(sym) = fir.symbols.get(name).and_then(|s| s.def) {
                             dfg.edges.push((sym, id));
@@ -1411,6 +1427,7 @@ pub(super) fn build_dfg(
                             kind: DFNodeKind::Return,
                             sanitized: false,
                             branch: branch_stack.last().copied(),
+                        ..Default::default()
                         });
                         if let Some(sym) = fir.symbols.get(name).and_then(|s| s.def) {
                             dfg.edges.push((sym, id));
@@ -1451,6 +1468,7 @@ pub(super) fn build_dfg(
                                                 kind: DFNodeKind::Return,
                                                 sanitized: false,
                                                 branch: branch_stack.last().copied(),
+                        ..Default::default()
                                             });
                                             if let Some(sym) =
                                                 fir.symbols.get(&rhs).and_then(|s| s.def)
@@ -1489,6 +1507,7 @@ pub(super) fn build_dfg(
                                             kind: DFNodeKind::Return,
                                             sanitized: false,
                                             branch: branch_stack.last().copied(),
+                        ..Default::default()
                                         });
                                         if let Some(sym) = fir.symbols.get(var).and_then(|s| s.def)
                                         {
@@ -1534,6 +1553,7 @@ pub(super) fn build_dfg(
                         kind: DFNodeKind::Use,
                         sanitized: false,
                         branch: branch_stack.last().copied(),
+                        ..Default::default()
                     });
                     if let Some(sym) = fir.symbols.get(name) {
                         if let Some(def_id) = sym.def {
@@ -1566,6 +1586,7 @@ pub(super) fn build_dfg(
                         kind: DFNodeKind::Use,
                         sanitized: false,
                         branch: branch_stack.last().copied(),
+                        ..Default::default()
                     });
                     if let Some(sym) = fir.symbols.get(&name).and_then(|s| s.def) {
                         dfg.edges.push((sym, id));

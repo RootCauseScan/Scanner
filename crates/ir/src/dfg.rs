@@ -14,8 +14,9 @@ pub fn stable_id(path: &str, line: usize, column: usize, name: &str) -> usize {
     h as usize
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub enum DFNodeKind {
+    #[default]
     Def,
     Param,
     Use,
@@ -24,7 +25,7 @@ pub enum DFNodeKind {
     Branch,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct DFNode {
     pub id: usize,
     pub name: String,
@@ -33,6 +34,12 @@ pub struct DFNode {
     pub sanitized: bool,
     #[serde(default)]
     pub branch: Option<usize>,
+    /// Source line where this node is defined (0 = unknown).
+    #[serde(default)]
+    pub line: usize,
+    /// BasicBlock id that contains this node (set by engine after CFG is built).
+    #[serde(default)]
+    pub block_id: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
