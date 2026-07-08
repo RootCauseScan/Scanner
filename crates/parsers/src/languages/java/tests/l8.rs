@@ -1301,3 +1301,166 @@ class T {
     let e_param = dfg.nodes.iter().find(|n| n.name == "e" && matches!(n.kind, DFNodeKind::Param));
     assert!(e_param.is_some(), "catch variable must have a Param DFG node");
 }
+
+// -------------------------------------------------------------------
+// Static final field referenced without this. prefix
+// -------------------------------------------------------------------
+
+#[test]
+fn static_final_concat_is_sanitized_when_field_referenced_without_this() {
+    // Static final string fields are stored as "this.TABLE" in the symbol table,
+    // but in code they are referenced as just "TABLE". The concatenation result
+    // must be recognized as sanitized.
+    let code = r#"
+class T {
+    static final String TABLE = "users";
+    void query() {
+        String sql = "SELECT * FROM " + TABLE;
+        sink(sql);
+    }
+}
+"#;
+    let fir = parse_snippet(code);
+    let table_sym = fir.symbols.get("this.TABLE").expect("this.TABLE must be tracked");
+    assert!(table_sym.sanitized, "static final field must be sanitized");
+    let sql_sym = fir.symbols.get("sql").expect("sql must be tracked");
+    assert!(sql_sym.sanitized, "concat with a sanitized static final constant must be sanitized");
+}
+
+#[test]
+fn static_field_referenced_without_this_with_tainted_creates_tainted() {
+    // Static const + tainted param → tainted result
+    let code = r#"
+class T {
+    static final String PREFIX = "safe_prefix_";
+    void run(String raw) {
+        String result = PREFIX + raw;
+        sink(result);
+    }
+}
+"#;
+    let fir = parse_snippet(code);
+    let sym = fir.symbols.get("result").expect("result must be tracked");
+    assert!(!sym.sanitized, "concat of static constant + tainted param must remain tainted");
+}
+
+// -------------------------------------------------------------------
+// Null literal assignment is sanitized
+// -------------------------------------------------------------------
+
+#[test]
+fn null_literal_assignment_is_sanitized() {
+    let code = r#"
+class T {
+    void run() {
+        String data = source();
+        data = null;
+        sink(data);
+    }
+}
+"#;
+    let fir = parse_snippet(code);
+    let sym = fir.symbols.get("data").expect("data must be tracked");
+    assert!(sym.sanitized, "reassignment to null should clear taint (null_literal is sanitized)");
+}
+
+// -------------------------------------------------------------------
+// Switch expression taint propagation (Java 14+)
+// -------------------------------------------------------------------
+
+#[test]
+fn switch_expression_tainted_arm_marks_result_tainted() {
+    let code = r#"
+class T {
+    void run(String kind, String raw) {
+        String result = switch (kind) {
+            case "a" -> raw;
+            default -> "safe";
+        };
+        sink(result);
+    }
+}
+"#;
+    let fir = parse_snippet(code);
+    let sym = fir.symbols.get("result").expect("result must be tracked");
+    assert!(!sym.sanitized, "switch expression with tainted arm must produce tainted result");
+}
+
+#[test]
+fn switch_expression_all_literal_arms_are_sanitized() {
+    let code = r#"
+class T {
+    void run(String kind) {
+        String result = switch (kind) {
+            case "a" -> "first";
+            case "b" -> "second";
+            default -> "other";
+        };
+        sink(result);
+    }
+}
+"#;
+    let fir = parse_snippet(code);
+    if let Some(sym) = fir.symbols.get("result") {
+        assert!(sym.sanitized, "switch expression with only literal arms must be sanitized");
+    }
+}
+
+// -------------------------------------------------------------------
+// Multiple independent parameters — DFG node isolation
+// -------------------------------------------------------------------
+
+#[test]
+fn two_params_have_separate_dfg_nodes() {
+    let code = r#"
+class T {
+    void run(String raw, String safe) {
+        sink(safe);
+    }
+}
+"#;
+    let fir = parse_snippet(code);
+    let dfg = fir.dfg.as_ref().expect("dfg");
+    let raw_node = dfg.nodes.iter().find(|n| n.name == "raw" && matches!(n.kind, DFNodeKind::Param));
+    let safe_node = dfg.nodes.iter().find(|n| n.name == "safe" && matches!(n.kind, DFNodeKind::Param));
+    assert!(raw_node.is_some(), "raw must have a Param node");
+    assert!(safe_node.is_some(), "safe must have a Param node");
+    assert_ne!(raw_node.unwrap().id, safe_node.unwrap().id, "raw and safe must be separate DFG nodes");
+}
+
+// -------------------------------------------------------------------
+// Intra-class taint through this.field
+// -------------------------------------------------------------------
+
+#[test]
+fn taint_flows_through_this_field_assignment_in_setter() {
+    let code = r#"
+class T {
+    private String value;
+
+    void setValue(String input) {
+        this.value = input;
+    }
+}
+"#;
+    let fir = parse_snippet(code);
+    let sym = fir.symbols.get("this.value").expect("this.value must be tracked");
+    assert!(!sym.sanitized, "this.value assigned from param must be tainted");
+}
+
+#[test]
+fn sanitized_field_accessed_via_this_is_clean() {
+    let code = r#"
+class T {
+    private String safeField = "constant";
+
+    void run() {
+        String result = this.safeField;
+        sink(result);
+    }
+}
+"#;
+    let fir = parse_snippet(code);
+    let sym = fir.symbols.get("this.safeField").expect("this.safeField must be tracked");
+    assert!(sym.sanitized, "literal-initialized field must be sanitized");
+}

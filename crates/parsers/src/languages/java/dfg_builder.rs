@@ -27,12 +27,20 @@ fn base_of(name: &str) -> Option<&str> {
 
 fn find_symbol<'a>(name: &str, symbols: &'a HashMap<String, Symbol>) -> Option<&'a Symbol> {
     if let Some(sym) = symbols.get(name) {
-        Some(sym)
-    } else if let Some(base) = base_of(name) {
-        find_symbol(base, symbols)
-    } else {
-        None
+        return Some(sym);
     }
+    if let Some(base) = base_of(name) {
+        return find_symbol(base, symbols);
+    }
+    // Static/instance fields are stored with a "this." prefix. When code references
+    // a field by its bare name (e.g. TABLE instead of this.TABLE), fall back to the
+    // prefixed form so taint/sanitization is resolved correctly.
+    if !name.starts_with("this.") {
+        if let Some(sym) = symbols.get(&format!("this.{name}")) {
+            return Some(sym);
+        }
+    }
+    None
 }
 
 fn node_text_trimmed(node: Node, src: &str) -> Option<String> {
@@ -43,7 +51,7 @@ fn node_text_trimmed(node: Node, src: &str) -> Option<String> {
 
 /// Returns true when the expression is made entirely of compile-time constants
 /// (literals and operators) with no variable references or method calls.
-/// For ternary expressions only the value branches are checked, not the condition.
+/// For ternary/switch expressions only the value branches are checked, not the condition.
 fn is_constant_expression(node: Node) -> bool {
     let k = node.kind();
     if k.ends_with("_literal") || k == "true" || k == "false" || k == "null_literal"
@@ -64,6 +72,34 @@ fn is_constant_expression(node: Node) -> bool {
             .map(|c| is_constant_expression(c))
             .unwrap_or(true);
         return cons_ok && alt_ok;
+    }
+    // Switch expressions: only check arm consequences, not the switch value (condition).
+    if k == "switch_expression" {
+        if let Some(body) = node.child_by_field_name("body") {
+            let mut bc = body.walk();
+            for group in body.children(&mut bc) {
+                match group.kind() {
+                    "switch_rule" => {
+                        let mut gc = group.walk();
+                        for child in group.children(&mut gc) {
+                            if child.kind() == "switch_label" || child.kind() == "->" {
+                                continue;
+                            }
+                            if child.is_named() && !is_constant_expression(child) {
+                                return false;
+                            }
+                        }
+                    }
+                    "switch_block_statement_group" => {
+                        // Traditional-form blocks are too complex to evaluate statically.
+                        return false;
+                    }
+                    _ => {}
+                }
+            }
+            return true;
+        }
+        return false;
     }
     let mut cursor = node.walk();
     let result = node
@@ -195,6 +231,39 @@ fn gather_ids(node: Node, src: &str, out: &mut Vec<String>) {
             }
             if let Some(alt) = node.child_by_field_name("alternative") {
                 gather_ids(alt, src, out);
+            }
+            return;
+        }
+        "switch_expression" => {
+            // Like ternary, the switched value (condition) decides which arm runs but does
+            // not itself flow into the result — only the arm consequences carry data.
+            if let Some(body) = node.child_by_field_name("body") {
+                let mut bc = body.walk();
+                for group in body.children(&mut bc) {
+                    match group.kind() {
+                        "switch_rule" => {
+                            let mut gc = group.walk();
+                            for child in group.children(&mut gc) {
+                                if child.kind() == "switch_label" || child.kind() == "->" {
+                                    continue;
+                                }
+                                if child.is_named() {
+                                    gather_ids(child, src, out);
+                                }
+                            }
+                        }
+                        "switch_block_statement_group" => {
+                            let mut gc = group.walk();
+                            for stmt in group.children(&mut gc) {
+                                if stmt.kind() == "switch_label" {
+                                    continue;
+                                }
+                                gather_ids(stmt, src, out);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
             }
             return;
         }
@@ -365,6 +434,14 @@ fn merge_states(fir: &mut FileIR, states: Vec<HashMap<String, Symbol>>, merge_co
 
 fn propagate_sanitized(fir: &mut FileIR) {
     if let Some(dfg) = &mut fir.dfg {
+        // Build a reverse-edge map so we can check ALL incoming edges to a node.
+        let edges = dfg.edges.clone();
+        let mut incoming: HashMap<usize, Vec<usize>> = HashMap::new();
+        for &(src, dst) in &edges {
+            incoming.entry(dst).or_default().push(src);
+        }
+
+        // Seed the queue with nodes that are already marked sanitized.
         let mut queue: Vec<usize> = dfg
             .nodes
             .iter()
@@ -372,28 +449,57 @@ fn propagate_sanitized(fir: &mut FileIR) {
             .map(|n| n.id)
             .collect();
         let mut visited = HashSet::new();
-        let edges = dfg.edges.clone();
+
         while let Some(id) = queue.pop() {
             if !visited.insert(id) {
                 continue;
             }
-            for &(src, dst) in &edges {
-                if src == id {
-                    if let Some(node) = find_node_mut(dfg, dst) {
-                        if matches!(node.kind, DFNodeKind::Assign) && node.branch.is_none() {
-                            continue;
-                        }
-                        if !node.sanitized {
-                            node.sanitized = true;
-                            let canonical = resolve_alias(&node.name, &fir.symbols);
-                            if let Some(sym) = fir.symbols.get_mut(&canonical) {
-                                sym.sanitized = true;
-                            } else if let Some(sym) = fir.symbols.get_mut(&node.name) {
-                                sym.sanitized = true;
-                            }
-                            queue.push(dst);
-                        }
+            // Collect candidate destination ids first (immutable pass).
+            let candidates: Vec<usize> = edges
+                .iter()
+                .filter(|&&(src, _)| src == id)
+                .filter_map(|&(_, dst)| {
+                    let node = dfg.nodes.iter().find(|n| n.id == dst)?;
+                    if node.sanitized {
+                        return None;
                     }
+                    if matches!(node.kind, DFNodeKind::Assign) && node.branch.is_none() {
+                        return None;
+                    }
+                    // Only propagate when EVERY incoming edge comes from a sanitized node.
+                    // A node with both sanitized and unsanitized sources (e.g. `result = CONST + raw`)
+                    // must remain tainted.
+                    let all_sanitized = incoming
+                        .get(&dst)
+                        .map(|srcs| {
+                            srcs.iter().all(|&s| {
+                                dfg.nodes
+                                    .iter()
+                                    .find(|n| n.id == s)
+                                    .map(|n| n.sanitized)
+                                    .unwrap_or(false)
+                            })
+                        })
+                        .unwrap_or(true);
+                    if all_sanitized { Some(dst) } else { None }
+                })
+                .collect();
+
+            // Mutable update pass.
+            for dst in candidates {
+                if let Some(node) = find_node_mut(dfg, dst) {
+                    node.sanitized = true;
+                    let (name, canonical) = {
+                        let n = dfg.nodes.iter().find(|n| n.id == dst).unwrap();
+                        let c = resolve_alias(&n.name, &fir.symbols);
+                        (n.name.clone(), c)
+                    };
+                    if let Some(sym) = fir.symbols.get_mut(&canonical) {
+                        sym.sanitized = true;
+                    } else if let Some(sym) = fir.symbols.get_mut(&name) {
+                        sym.sanitized = true;
+                    }
+                    queue.push(dst);
                 }
             }
         }
