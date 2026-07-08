@@ -41,6 +41,36 @@ fn node_text_trimmed(node: Node, src: &str) -> Option<String> {
         .map(|s| s.trim().to_string())
 }
 
+/// Returns true when the expression is made entirely of compile-time constants
+/// (literals and operators) with no variable references or method calls.
+/// For ternary expressions only the value branches are checked, not the condition.
+fn is_constant_expression(node: Node) -> bool {
+    let k = node.kind();
+    if k.ends_with("_literal") || k == "true" || k == "false" || k == "null_literal" {
+        return true;
+    }
+    if k == "identifier" || k == "method_invocation" || k == "object_creation_expression" {
+        return false;
+    }
+    if k == "ternary_expression" {
+        let cons_ok = node
+            .child_by_field_name("consequence")
+            .map(|c| is_constant_expression(c))
+            .unwrap_or(true);
+        let alt_ok = node
+            .child_by_field_name("alternative")
+            .map(|c| is_constant_expression(c))
+            .unwrap_or(true);
+        return cons_ok && alt_ok;
+    }
+    let mut cursor = node.walk();
+    let result = node
+        .children(&mut cursor)
+        .filter(|c| c.is_named())
+        .all(|c| is_constant_expression(c));
+    result
+}
+
 fn gather_ids(node: Node, src: &str, out: &mut Vec<String>) {
     match node.kind() {
         "identifier" => {
@@ -139,6 +169,17 @@ fn gather_ids(node: Node, src: &str, out: &mut Vec<String>) {
         "object_creation_expression" => {
             if let Some(args) = node.child_by_field_name("arguments") {
                 gather_ids(args, src, out);
+            }
+            return;
+        }
+        "ternary_expression" => {
+            // The condition determines WHICH branch is taken but doesn't flow into the value;
+            // collect identifiers only from the two value branches.
+            if let Some(cons) = node.child_by_field_name("consequence") {
+                gather_ids(cons, src, out);
+            }
+            if let Some(alt) = node.child_by_field_name("alternative") {
+                gather_ids(alt, src, out);
             }
             return;
         }
@@ -530,26 +571,36 @@ fn build_dfg(
                                 if val.kind() != "lambda_expression"
                                     && val.kind() != "method_reference"
                                 {
-                                    let mut call_sanitizer = false;
-                                    if let Some(call) = extract_call_path(val, src) {
-                                        if resolve_import(&call, imports, wildcards)
-                                            .into_iter()
-                                            .chain(std::iter::once(call.clone()))
-                                            .any(|f| {
-                                                catalog_module::is_sanitizer("java", &f)
-                                                    || matches!(
-                                                        fir.symbol_types.get(&f),
-                                                        Some(SymbolKind::Sanitizer)
-                                                    )
-                                            })
-                                        {
-                                            call_sanitizer = true;
+                                    let vk = val.kind();
+                                    if vk.ends_with("_literal")
+                                        || vk == "true"
+                                        || vk == "false"
+                                        || vk == "null_literal"
+                                        || is_constant_expression(val)
+                                    {
+                                        sanitized = true;
+                                    } else {
+                                        let mut call_sanitizer = false;
+                                        if let Some(call) = extract_call_path(val, src) {
+                                            if resolve_import(&call, imports, wildcards)
+                                                .into_iter()
+                                                .chain(std::iter::once(call.clone()))
+                                                .any(|f| {
+                                                    catalog_module::is_sanitizer("java", &f)
+                                                        || matches!(
+                                                            fir.symbol_types.get(&f),
+                                                            Some(SymbolKind::Sanitizer)
+                                                        )
+                                                })
+                                            {
+                                                call_sanitizer = true;
+                                            }
                                         }
+                                        if !call_sanitizer {
+                                            gather_ids(val, src, &mut ids);
+                                        }
+                                        sanitized = call_sanitizer;
                                     }
-                                    if !call_sanitizer {
-                                        gather_ids(val, src, &mut ids);
-                                    }
-                                    sanitized = call_sanitizer;
                                 }
                                 let field_key = format!("this.{var}");
                                 let (id, field_line) = stable_node_id2(fir, Some(name_node), &format!("field:{var}"));
@@ -640,11 +691,13 @@ fn build_dfg(
                             if let Some(val) = child.child_by_field_name("value") {
                                 let vkind = val.kind();
                                 if vkind != "lambda_expression" && vkind != "method_reference" {
-                                    // Constant/literal initializers cannot carry taint.
+                                    // Constant/literal initializers (including pure literal
+                                    // concatenations and ternaries of literals) cannot carry taint.
                                     if vkind.ends_with("_literal")
                                         || vkind == "true"
                                         || vkind == "false"
                                         || vkind == "null_literal"
+                                        || is_constant_expression(val)
                                     {
                                         sanitized = true;
                                     } else {
@@ -753,6 +806,7 @@ fn build_dfg(
                                 || rkind == "true"
                                 || rkind == "false"
                                 || rkind == "null_literal"
+                                || is_constant_expression(right)
                             {
                                 sanitized = true;
                             } else {
@@ -784,7 +838,27 @@ fn build_dfg(
                             }
                         }
                     }
-                    let alias_cand = if ids.len() == 1
+                    // Detect compound assignment (+=, -=, etc.): tree-sitter-java uses
+                    // assignment_expression for both simple (=) and compound (+=, etc.) ops.
+                    let is_compound = node
+                        .child_by_field_name("operator")
+                        .and_then(|op| op.utf8_text(src.as_bytes()).ok())
+                        .map(|op| op != "=")
+                        .unwrap_or(false);
+
+                    // For compound assignments the old lhs value contributes taint, so only
+                    // treat result as sanitized if BOTH old value and rhs are sanitized.
+                    let old_sanitized = if is_compound {
+                        find_symbol(var, &fir.symbols)
+                            .map(|s| s.sanitized)
+                            .unwrap_or(false)
+                    } else {
+                        true // simple assignment: old value is completely replaced
+                    };
+
+                    // Pure-alias detection: only for simple assignments where rhs is a bare id.
+                    let alias_cand = if !is_compound
+                        && ids.len() == 1
                         && node
                             .child_by_field_name("right")
                             .map(|v| v.kind() == "identifier")
@@ -799,6 +873,24 @@ fn build_dfg(
                         .and_then(|c| find_symbol(c, &fir.symbols))
                         .map(|s| s.sanitized)
                         .unwrap_or(false);
+
+                    let base_def_id = if let Some(base) = base_of(var) {
+                        find_symbol(base, &fir.symbols).and_then(|s| s.def)
+                    } else {
+                        None
+                    };
+                    let base_sanitized = if let Some(base) = base_of(var) {
+                        find_symbol(base, &fir.symbols)
+                            .map(|s| s.sanitized)
+                            .unwrap_or(false)
+                    } else {
+                        false
+                    };
+
+                    // Compute final sanitization state EXPLICITLY (never inherit stale state).
+                    let rhs_sanitized = sanitized || alias_sanitized || base_sanitized;
+                    let new_sanitized = rhs_sanitized && old_sanitized;
+
                     let (id, assign_line) = stable_node_id2(fir, Some(left), &format!("local:{var}"));
                     fir.dfg
                         .get_or_insert_with(DataFlowGraph::default)
@@ -807,7 +899,7 @@ fn build_dfg(
                             id,
                             name: var.to_string(),
                             kind: DFNodeKind::Def,
-                            sanitized: sanitized || alias_sanitized,
+                            sanitized: new_sanitized,
                             branch: branch_stack.last().copied(),
                             line: assign_line,
                         ..Default::default()
@@ -816,20 +908,6 @@ fn build_dfg(
                         .iter()
                         .map(|src_name| resolve_alias(src_name, &fir.symbols))
                         .collect();
-
-                    let base_def_id = if let Some(base) = base_of(var) {
-                        find_symbol(base, &fir.symbols).and_then(|s| s.def)
-                    } else {
-                        None
-                    };
-
-                    let base_sanitized = if let Some(base) = base_of(var) {
-                        find_symbol(base, &fir.symbols)
-                            .map(|s| s.sanitized)
-                            .unwrap_or(false)
-                    } else {
-                        false
-                    };
 
                     let sym = fir
                         .symbols
@@ -841,24 +919,12 @@ fn build_dfg(
                             alias_of: None,
                         });
                     sym.def = Some(id);
+                    // Always set sanitized to the freshly computed value (never inherit stale state).
+                    sym.sanitized = new_sanitized;
                     if let Some(c) = alias_cand {
-                        sym.alias_of = Some(c.clone());
-                        if alias_sanitized {
-                            sym.sanitized = true;
-                        }
-                    }
-                    if sanitized {
-                        sym.sanitized = true;
-                    }
-                    if base_sanitized {
-                        sym.sanitized = true;
-                    }
-                    if sym.sanitized {
-                        if let Some(dfg) = fir.dfg.as_mut() {
-                            if let Some(n) = find_node_mut(dfg, id) {
-                                n.sanitized = true;
-                            }
-                        }
+                        sym.alias_of = Some(c);
+                    } else {
+                        sym.alias_of = None;
                     }
 
                     for canonical in canonical_names {

@@ -1,5 +1,6 @@
 //! Level 8: constructor DFG, do-while branches, catch parameter Param nodes,
-//! initialized field declarations, and intra-file taint for Java.
+//! initialized field declarations, intra-file taint, compound assignments,
+//! ternary expressions, and string concatenation taint for Java.
 
 use crate::parse_java;
 use ir::{DFNodeKind, FileIR};
@@ -374,3 +375,176 @@ class T {
             .collect::<Vec<_>>()
     );
 }
+
+// -------------------------------------------------------------------
+// Compound assignment (+=) taint propagation
+// -------------------------------------------------------------------
+
+#[test]
+fn compound_assignment_tainted_rhs_marks_lhs_tainted() {
+    let code = r#"
+class T {
+    void test() {
+        String msg = "";
+        String input = source();
+        msg += input;
+        sink(msg);
+    }
+}
+"#;
+    let fir = parse_snippet(code);
+    let dfg = fir.dfg.as_ref().expect("dfg");
+
+    // msg should appear as a Def node (from the compound assignment)
+    assert!(
+        dfg.nodes.iter().any(|n| n.name == "msg" && matches!(n.kind, DFNodeKind::Def)),
+        "compound += should create a Def node for msg"
+    );
+    // After msg += input (where input is tainted), msg should NOT be sanitized
+    let sym = fir.symbols.get("msg").expect("msg symbol");
+    assert!(!sym.sanitized, "msg should remain tainted after += with tainted input");
+}
+
+#[test]
+fn compound_assignment_safe_rhs_keeps_taint_if_lhs_was_tainted() {
+    let code = r#"
+class T {
+    void test() {
+        String msg = source();
+        msg += " safe suffix";
+        sink(msg);
+    }
+}
+"#;
+    let fir = parse_snippet(code);
+    let sym = fir.symbols.get("msg").expect("msg symbol");
+    // msg started tainted; += with a literal suffix should keep it tainted (conservative)
+    assert!(!sym.sanitized, "msg should stay tainted after += with a literal when lhs was already tainted");
+}
+
+#[test]
+fn compound_assignment_creates_def_with_nonzero_line() {
+    let code = r#"
+class T {
+    void test() {
+        String s = "hello";
+        s += " world";
+    }
+}
+"#;
+    let fir = parse_snippet(code);
+    let dfg = fir.dfg.as_ref().expect("dfg");
+    let compound_def = dfg.nodes.iter().find(|n| n.name == "s" && n.line > 2);
+    // The compound_assignment Def should be on the line of `s += " world"`
+    assert!(
+        compound_def.is_some(),
+        "compound_assignment_expression should create a Def node for s with line > 0"
+    );
+}
+
+// -------------------------------------------------------------------
+// Ternary expression taint propagation
+// -------------------------------------------------------------------
+
+#[test]
+fn ternary_tainted_consequence_marks_result_tainted() {
+    let code = r#"
+class T {
+    void run(boolean cond) {
+        String data = cond ? source() : "safe";
+        sink(data);
+    }
+}
+"#;
+    let fir = parse_snippet(code);
+    // Conservative: if any branch of ternary can be tainted, result is tainted.
+    let sym = fir.symbols.get("data").expect("data symbol");
+    assert!(!sym.sanitized, "ternary with tainted consequence should mark result tainted");
+}
+
+#[test]
+fn ternary_both_safe_marks_result_sanitized() {
+    let code = r#"
+class T {
+    void run(boolean cond) {
+        String data = cond ? "safe_a" : "safe_b";
+        sink(data);
+    }
+}
+"#;
+    let fir = parse_snippet(code);
+    let sym = fir.symbols.get("data").expect("data symbol");
+    assert!(sym.sanitized, "ternary with two literal branches should be sanitized");
+}
+
+#[test]
+fn ternary_sanitized_alternative_with_tainted_consequence_is_tainted() {
+    let code = r#"
+class T {
+    void run(boolean cond) {
+        String raw = source();
+        String data = cond ? raw : "fallback";
+        sink(data);
+    }
+}
+"#;
+    let fir = parse_snippet(code);
+    let sym = fir.symbols.get("data").expect("data symbol");
+    assert!(!sym.sanitized, "ternary where consequence is tainted identifier should be tainted");
+}
+
+// -------------------------------------------------------------------
+// String concatenation (+) taint propagation
+// -------------------------------------------------------------------
+
+#[test]
+fn string_concat_with_tainted_var_is_tainted() {
+    let code = r#"
+class T {
+    void run() {
+        String userInput = source();
+        String query = "SELECT * FROM t WHERE name = '" + userInput + "'";
+        sink(query);
+    }
+}
+"#;
+    let fir = parse_snippet(code);
+    let sym = fir.symbols.get("query").expect("query symbol");
+    assert!(!sym.sanitized, "string concatenation with tainted var should produce tainted result");
+}
+
+#[test]
+fn string_concat_all_literals_is_sanitized() {
+    let code = r#"
+class T {
+    void run() {
+        String msg = "Hello" + " " + "world";
+        sink(msg);
+    }
+}
+"#;
+    let fir = parse_snippet(code);
+    // All parts are literals; msg should be treated as safe.
+    // (gather_ids recurses but finds no identifier children → no tainted edges)
+    let sym = fir.symbols.get("msg").expect("msg symbol");
+    assert!(sym.sanitized, "concatenation of only literals should produce sanitized result");
+}
+
+#[test]
+fn reassignment_overwrites_taint_state() {
+    // After `x = source()`, x is tainted.
+    // After `x = "safe"`, x should be sanitized (simple overwrite).
+    let code = r#"
+class T {
+    void run() {
+        String x = source();
+        x = "safe_literal";
+        sink(x);
+    }
+}
+"#;
+    let fir = parse_snippet(code);
+    let sym = fir.symbols.get("x").expect("x symbol");
+    assert!(sym.sanitized, "reassignment to literal should overwrite taint and mark x sanitized");
+}
+
