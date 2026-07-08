@@ -387,6 +387,17 @@ fn merge_states(fir: &mut FileIR, states: Vec<HashMap<String, Symbol>>, merge_co
     }
     let mut merged = HashMap::new();
     for name in names {
+        // Count states that actually define this variable.
+        // A variable that only exists in one branch (e.g. declared inside a try or if block)
+        // is never accessible from other branches, so there is no competing definition to
+        // merge against; simply inherit that branch's state instead of forcing sanitized=false.
+        let defining_count = states.iter().filter(|s| s.contains_key(&name)).count();
+        if defining_count <= 1 {
+            if let Some(sym) = states.iter().find_map(|s| s.get(&name)) {
+                merged.insert(name.clone(), sym.clone());
+            }
+            continue;
+        }
         let mut sanitized_all = true;
         let mut defs = Vec::new();
         let mut alias = None;

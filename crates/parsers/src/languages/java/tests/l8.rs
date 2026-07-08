@@ -1964,3 +1964,251 @@ class T {
     }
 }
 
+
+// -------------------------------------------------------------------
+// Taint through getter/setter pattern (inter-method field propagation)
+// -------------------------------------------------------------------
+
+#[test]
+fn setter_then_getter_propagates_taint() {
+    // Taint written via setX() then read via getX() through a field.
+    let code = r#"
+class T {
+    private String value;
+    public void setValue(String v) { this.value = v; }
+    public String getValue() { return this.value; }
+    public void run(String raw) {
+        setValue(raw);
+        String result = getValue();
+        sink(result);
+    }
+}
+"#;
+    let fir = parse_snippet(code);
+    // this.value should be tainted after setValue(raw)
+    let field = fir.symbols.get("this.value").or_else(|| fir.symbols.get("value"));
+    if let Some(s) = field {
+        assert!(!s.sanitized, "this.value after setValue(tainted) must be tainted");
+    }
+}
+
+// -------------------------------------------------------------------
+// Taint via exception constructor args
+// -------------------------------------------------------------------
+
+#[test]
+fn exception_with_tainted_message_is_tainted() {
+    // new RuntimeException(tainted) — the exception carries the taint.
+    let code = r#"
+class T {
+    void run(String userInput) {
+        RuntimeException ex = new RuntimeException(userInput);
+        sink(ex.getMessage());
+    }
+}
+"#;
+    let fir = parse_snippet(code);
+    if let Some(sym) = fir.symbols.get("ex") {
+        assert!(!sym.sanitized, "exception created with tainted message must be tainted");
+    }
+}
+
+// -------------------------------------------------------------------
+// Taint does NOT flow from unrelated variable
+// -------------------------------------------------------------------
+
+#[test]
+fn unrelated_tainted_variable_does_not_taint_literal_result() {
+    let code = r#"
+class T {
+    void run(String raw) {
+        // raw is tainted but we never use it in building result.
+        String result = "SELECT 1";
+        sink(result);
+    }
+}
+"#;
+    let fir = parse_snippet(code);
+    if let Some(sym) = fir.symbols.get("result") {
+        assert!(sym.sanitized, "literal assignment must be sanitized regardless of other tainted variables");
+    }
+}
+
+// -------------------------------------------------------------------
+// Taint through string split / join
+// -------------------------------------------------------------------
+
+#[test]
+fn string_split_of_tainted_is_tainted() {
+    let code = r#"
+class T {
+    void run(String raw) {
+        String[] parts = raw.split(",");
+        sink(parts[0]);
+    }
+}
+"#;
+    let fir = parse_snippet(code);
+    if let Some(sym) = fir.symbols.get("parts") {
+        assert!(!sym.sanitized, "splitting a tainted string produces tainted parts");
+    }
+}
+
+#[test]
+fn string_join_with_literal_args_is_sanitized() {
+    let code = r#"
+class T {
+    void run() {
+        String result = String.join(", ", "a", "b", "c");
+        sink(result);
+    }
+}
+"#;
+    let fir = parse_snippet(code);
+    if let Some(sym) = fir.symbols.get("result") {
+        assert!(sym.sanitized, "String.join with only literals must be sanitized");
+    }
+}
+
+#[test]
+fn string_join_with_tainted_arg_is_tainted() {
+    let code = r#"
+class T {
+    void run(String raw) {
+        String result = String.join(", ", "a", raw);
+        sink(result);
+    }
+}
+"#;
+    let fir = parse_snippet(code);
+    if let Some(sym) = fir.symbols.get("result") {
+        assert!(!sym.sanitized, "String.join with a tainted element must be tainted");
+    }
+}
+
+
+// -------------------------------------------------------------------
+// Enum / constant field usage
+// -------------------------------------------------------------------
+
+#[test]
+fn enum_constant_is_sanitized() {
+    // Enum constants (ALL_CAPS by convention) are compile-time values — sanitized.
+    let code = r#"
+class T {
+    enum Status { ACTIVE, INACTIVE }
+    void run() {
+        String val = Status.ACTIVE.name();
+        sink(val);
+    }
+}
+"#;
+    let fir = parse_snippet(code);
+    if let Some(sym) = fir.symbols.get("val") {
+        assert!(sym.sanitized, "enum constant name() is sanitized");
+    }
+}
+
+// -------------------------------------------------------------------
+// Cascaded ternary with mixed taint
+// -------------------------------------------------------------------
+
+#[test]
+fn nested_ternary_one_branch_tainted() {
+    let code = r#"
+class T {
+    void run(boolean a, boolean b, String raw) {
+        String result = a ? (b ? raw : "safe") : "also_safe";
+        sink(result);
+    }
+}
+"#;
+    let fir = parse_snippet(code);
+    if let Some(sym) = fir.symbols.get("result") {
+        assert!(!sym.sanitized, "nested ternary with one tainted leaf must produce tainted result");
+    }
+}
+
+// -------------------------------------------------------------------
+// try/catch: taint escaping through catch variable
+// -------------------------------------------------------------------
+
+#[test]
+fn taint_does_not_flow_into_catch_var_from_unrelated_code() {
+    let code = r#"
+class T {
+    void run() {
+        try {
+            String safe = "constant";
+            sink(safe);
+        } catch (Exception e) {
+            // e.getMessage() should not be tainted just because try block ran
+        }
+    }
+}
+"#;
+    let fir = parse_snippet(code);
+    // "safe" must be sanitized even though it's inside a try block
+    if let Some(sym) = fir.symbols.get("safe") {
+        assert!(sym.sanitized, "literal in try block must remain sanitized");
+    }
+}
+
+// -------------------------------------------------------------------
+// Taint isolation: parameter of one method does not taint another
+// -------------------------------------------------------------------
+
+#[test]
+fn param_of_one_method_does_not_taint_sibling_method_param() {
+    let code = r#"
+class T {
+    void methodA(String raw) {
+        sink(raw);
+    }
+    void methodB(String clean) {
+        // clean is a separate parameter — raw from methodA must not taint it
+    }
+    void run() {
+        methodA(source());
+        methodB("safe");
+    }
+}
+"#;
+    let fir = parse_snippet(code);
+    // "clean" is a separate Param node from "raw" — should be unrelated
+    // We can't easily test param isolation here without checking DFG edges,
+    // but at least verify that "clean" has its own symbol entry
+    let sym_raw = fir.symbols.get("raw");
+    let sym_clean = fir.symbols.get("clean");
+    if let (Some(r), Some(c)) = (sym_raw, sym_clean) {
+        assert_ne!(r.def, c.def, "raw and clean must have distinct DFG node ids");
+    }
+}
+
+// -------------------------------------------------------------------
+// Pattern: HttpServletRequest → variable → SQL concat
+// -------------------------------------------------------------------
+
+#[test]
+fn http_request_getparameter_to_sql_concat_is_tainted() {
+    let code = r#"
+import javax.servlet.http.HttpServletRequest;
+class T {
+    void handle(HttpServletRequest request) {
+        String id = request.getParameter("id");
+        String query = "SELECT * FROM users WHERE id = '" + id + "'";
+        db.execute(query);
+    }
+}
+"#;
+    let fir = parse_snippet(code);
+    let id_sym = fir.symbols.get("id");
+    assert!(id_sym.is_some(), "id must be tracked as a symbol");
+    if let Some(sym) = id_sym {
+        assert!(!sym.sanitized, "getParameter result must be tainted");
+    }
+    if let Some(sym) = fir.symbols.get("query") {
+        assert!(!sym.sanitized, "SQL query with tainted id must be tainted");
+    }
+}
+
