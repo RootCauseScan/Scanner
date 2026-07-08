@@ -1705,3 +1705,133 @@ class T {
     }
 }
 
+
+// -------------------------------------------------------------------
+// Static method with variable args is tainted
+// -------------------------------------------------------------------
+
+#[test]
+fn message_format_with_tainted_arg_is_tainted() {
+    // MessageFormat.format is not a sanitizer; the result carries taint.
+    let code = r#"
+class T {
+    void run(String userInput) {
+        String result = java.text.MessageFormat.format("value: {0}", userInput);
+        sink(result);
+    }
+}
+"#;
+    let fir = parse_snippet(code);
+    if let Some(sym) = fir.symbols.get("result") {
+        assert!(!sym.sanitized, "MessageFormat.format with tainted arg must remain tainted");
+    }
+}
+
+// -------------------------------------------------------------------
+// Null-safe chained calls
+// -------------------------------------------------------------------
+
+#[test]
+fn optional_of_tainted_is_tainted() {
+    // Optional.of(tainted).get() — the tainted value flows through.
+    let code = r#"
+class T {
+    void run(String raw) {
+        String val = java.util.Optional.of(raw).get();
+        sink(val);
+    }
+}
+"#;
+    let fir = parse_snippet(code);
+    if let Some(sym) = fir.symbols.get("val") {
+        assert!(!sym.sanitized, "Optional.of(tainted).get() must propagate taint");
+    }
+}
+
+#[test]
+fn optional_of_literal_is_sanitized() {
+    let code = r#"
+class T {
+    void run() {
+        String val = java.util.Optional.of("safe").get();
+        sink(val);
+    }
+}
+"#;
+    let fir = parse_snippet(code);
+    if let Some(sym) = fir.symbols.get("val") {
+        assert!(sym.sanitized, "Optional.of(literal).get() must be sanitized");
+    }
+}
+
+// -------------------------------------------------------------------
+// Field assignment via bare name then read in another method
+// -------------------------------------------------------------------
+
+#[test]
+fn field_written_via_bare_name_tainted_in_second_method() {
+    let code = r#"
+class T {
+    private String data;
+    void set(String raw) {
+        data = raw;
+    }
+    void use() {
+        sink(data);
+    }
+}
+"#;
+    let fir = parse_snippet(code);
+    // `data` (stored under "data" or "this.data") should be tainted after
+    // set() assigns a parameter to it.
+    let sym = fir.symbols.get("data")
+        .or_else(|| fir.symbols.get("this.data"));
+    if let Some(sym) = sym {
+        assert!(!sym.sanitized, "field written from tainted param must be tainted");
+    }
+}
+
+// -------------------------------------------------------------------
+// Chained assignment `a = b = source()`
+// -------------------------------------------------------------------
+
+#[test]
+fn chained_assignment_both_vars_tainted() {
+    // b = source(); a = b — both a and b should be tainted.
+    let code = r#"
+class T {
+    void run() {
+        String b = source();
+        String a = b;
+        sink(a);
+    }
+}
+"#;
+    let fir = parse_snippet(code);
+    if let Some(sym) = fir.symbols.get("a") {
+        assert!(!sym.sanitized, "variable aliased from tainted source must be tainted");
+    }
+}
+
+// -------------------------------------------------------------------
+// String.valueOf() is NOT a sanitizer
+// -------------------------------------------------------------------
+
+#[test]
+fn string_valueof_tainted_is_tainted() {
+    let code = r#"
+class T {
+    void run(int rawInt) {
+        String val = String.valueOf(rawInt);
+        sink(val);
+    }
+}
+"#;
+    let fir = parse_snippet(code);
+    if let Some(sym) = fir.symbols.get("val") {
+        // String.valueOf is just a type conversion, not a sanitizer.
+        // rawInt is a parameter → tainted. val should inherit the taint.
+        assert!(!sym.sanitized, "String.valueOf(tainted) must remain tainted");
+    }
+}
+

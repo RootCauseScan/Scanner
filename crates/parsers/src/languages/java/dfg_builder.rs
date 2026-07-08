@@ -49,6 +49,15 @@ fn node_text_trimmed(node: Node, src: &str) -> Option<String> {
         .map(|s| s.trim().to_string())
 }
 
+/// Returns true for names that look like qualified class/type references rather than variable
+/// names. When `gather_ids` follows a field-access chain (e.g. `java.util.Optional`), the
+/// gathered identifier contains a dot-separated path where the terminal segment is PascalCase.
+/// Such names are never user-defined variables, so "not found in symbols" means "safe".
+fn looks_like_class_ref(name: &str) -> bool {
+    let last = name.rsplit('.').next().unwrap_or(name);
+    last.chars().next().map(|c| c.is_uppercase()).unwrap_or(false)
+}
+
 /// Returns true when the expression is made entirely of compile-time constants
 /// (literals and operators) with no variable references or method calls.
 /// For ternary/switch expressions only the value branches are checked, not the condition.
@@ -1008,12 +1017,14 @@ fn build_dfg(
                             }
                             // If all referenced variables are sanitized, the result is sanitized
                             // too (e.g. `"prefix" + cleanVar` or `a + b` where both are clean).
+                            // Qualified class references (e.g. java.util.Optional) that are not in
+                            // symbols are treated as sanitized because they are type names, not vars.
                             if !sanitized && !ids.is_empty() {
                                 let all_clean = ids.iter().all(|name| {
                                     let canonical = resolve_alias(name, &fir.symbols);
                                     find_symbol(&canonical, &fir.symbols)
                                         .map(|s| s.sanitized)
-                                        .unwrap_or(false)
+                                        .unwrap_or_else(|| looks_like_class_ref(&canonical))
                                 });
                                 if all_clean {
                                     sanitized = true;
@@ -1151,7 +1162,7 @@ fn build_dfg(
                             let canonical = resolve_alias(name, &fir.symbols);
                             find_symbol(&canonical, &fir.symbols)
                                 .map(|s| s.sanitized)
-                                .unwrap_or(false)
+                                .unwrap_or_else(|| looks_like_class_ref(&canonical))
                         });
                         if all_clean {
                             sanitized = true;
@@ -1963,7 +1974,7 @@ fn build_dfg(
                         let canonical = resolve_alias(name, &fir.symbols);
                         find_symbol(&canonical, &fir.symbols)
                             .map(|s| s.sanitized)
-                            .unwrap_or(false)
+                            .unwrap_or_else(|| looks_like_class_ref(&canonical))
                     });
                 for name in ids {
                     let canonical = resolve_alias(&name, &fir.symbols);
