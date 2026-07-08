@@ -873,18 +873,8 @@ fn build_dfg(
                                     if !call_sanitizer {
                                         gather_ids(val, src, &mut ids);
                                     }
-                                    let has_class_receiver = val
-                                        .child_by_field_name("object")
-                                        .and_then(|obj| {
-                                            if obj.kind() == "identifier" {
-                                                obj.utf8_text(src.as_bytes()).ok().map(|s| s.to_string())
-                                            } else {
-                                                None
-                                            }
-                                        })
-                                        .map(|r| r.chars().next().map(|c| c.is_uppercase()).unwrap_or(false))
-                                        .unwrap_or(false);
-                                    if !call_sanitizer && !is_known_source && ids.is_empty() && has_class_receiver {
+                                    let has_receiver = val.child_by_field_name("object").is_some();
+                                    if !call_sanitizer && !is_known_source && ids.is_empty() && has_receiver {
                                         sanitized = true;
                                     }
                                 } else {
@@ -993,23 +983,14 @@ fn build_dfg(
                                             if !call_sanitizer {
                                                 gather_ids(val, src, &mut ids);
                                             }
-                                            // Static utility calls (e.g. String.format("fmt", "lit"))
-                                            // with a class-name receiver and no variable args carry
-                                            // no taint — the receiver is a type, not a variable.
-                                            let has_class_receiver = val
-                                                .child_by_field_name("object")
-                                                .and_then(|obj| {
-                                                    if obj.kind() == "identifier" {
-                                                        obj.utf8_text(src.as_bytes()).ok().map(|s| s.to_string())
-                                                    } else {
-                                                        None
-                                                    }
-                                                })
-                                                .map(|r| {
-                                                    r.chars().next().map(|c| c.is_uppercase()).unwrap_or(false)
-                                                })
-                                                .unwrap_or(false);
-                                            if !call_sanitizer && !is_known_source && ids.is_empty() && has_class_receiver {
+                                            // If gather_ids found no variable references in the call
+                                            // AND the call has a receiver (e.g. String.format("lit"),
+                                            // "safe".trim().toLowerCase()), the result has no way to
+                                            // carry user-controlled data and can be treated as clean.
+                                            // Bare function calls (no receiver, like `source()`) are
+                                            // excluded because they may be unrecognised taint sources.
+                                            let has_receiver = val.child_by_field_name("object").is_some();
+                                            if !call_sanitizer && !is_known_source && ids.is_empty() && has_receiver {
                                                 sanitized = true;
                                             }
                                         } else {
@@ -1149,20 +1130,8 @@ fn build_dfg(
                                     if !call_sanitizer {
                                         gather_ids(right, src, &mut ids);
                                     }
-                                    let has_class_receiver = right
-                                        .child_by_field_name("object")
-                                        .and_then(|obj| {
-                                            if obj.kind() == "identifier" {
-                                                obj.utf8_text(src.as_bytes()).ok().map(|s| s.to_string())
-                                            } else {
-                                                None
-                                            }
-                                        })
-                                        .map(|r| {
-                                            r.chars().next().map(|c| c.is_uppercase()).unwrap_or(false)
-                                        })
-                                        .unwrap_or(false);
-                                    if !call_sanitizer && !is_known_source && ids.is_empty() && has_class_receiver {
+                                    let has_receiver = right.child_by_field_name("object").is_some();
+                                    if !call_sanitizer && !is_known_source && ids.is_empty() && has_receiver {
                                         sanitized = true;
                                     }
                                 } else {
@@ -2299,37 +2268,64 @@ fn build_dfg(
             return;
         }
         "return_statement" => {
+            // Find the actual return value (skip the "return" keyword node).
+            let ret_val = (0..node.named_child_count()).filter_map(|i| node.named_child(i)).next();
             let mut ids = Vec::new();
             gather_ids(node, src, &mut ids);
-            for name in ids {
-                let (id, ret_line) = stable_node_id2(fir, Some(node), &format!("return:{name}"));
-                let canonical = resolve_alias(&name, &fir.symbols);
-                let sanitized = find_symbol(&canonical, &fir.symbols)
-                    .map(|s| s.sanitized)
-                    .unwrap_or(false);
-                push_node(
-                    fir,
-                    DFNode {
-                        id,
-                        name: name.clone(),
-                        kind: DFNodeKind::Return,
-                        sanitized,
-                        branch: branch_stack.last().copied(),
-                        line: ret_line,
-                        ..Default::default()
-                    },
-                );
-                fir.symbols.entry(name.clone()).or_insert_with(|| Symbol {
-                    name: name.clone(),
-                    sanitized: false,
-                    def: None,
-                    alias_of: None,
-                });
-                if let Some(def_id) = find_symbol(&canonical, &fir.symbols).and_then(|s| s.def) {
-                    push_edge(fir, (def_id, id));
-                }
+            if ids.is_empty() {
+                // The return value is a constant/literal expression with no variable references.
+                // Still create a sanitized Return node so call-site analysis can detect that this
+                // path is clean and contribute to the all-returns-sanitized check.
                 if let Some(func_id) = current_fn {
-                    fn_returns.entry(func_id).or_default().push(id);
+                    let is_void = ret_val.is_none();
+                    if !is_void {
+                        let (id, ret_line) = stable_node_id2(fir, Some(node), "return:__literal__");
+                        push_node(
+                            fir,
+                            DFNode {
+                                id,
+                                name: "__return__".to_string(),
+                                kind: DFNodeKind::Return,
+                                sanitized: true,
+                                branch: branch_stack.last().copied(),
+                                line: ret_line,
+                                ..Default::default()
+                            },
+                        );
+                        fn_returns.entry(func_id).or_default().push(id);
+                    }
+                }
+            } else {
+                for name in ids {
+                    let (id, ret_line) = stable_node_id2(fir, Some(node), &format!("return:{name}"));
+                    let canonical = resolve_alias(&name, &fir.symbols);
+                    let sanitized = find_symbol(&canonical, &fir.symbols)
+                        .map(|s| s.sanitized)
+                        .unwrap_or(false);
+                    push_node(
+                        fir,
+                        DFNode {
+                            id,
+                            name: name.clone(),
+                            kind: DFNodeKind::Return,
+                            sanitized,
+                            branch: branch_stack.last().copied(),
+                            line: ret_line,
+                            ..Default::default()
+                        },
+                    );
+                    fir.symbols.entry(name.clone()).or_insert_with(|| Symbol {
+                        name: name.clone(),
+                        sanitized: false,
+                        def: None,
+                        alias_of: None,
+                    });
+                    if let Some(def_id) = find_symbol(&canonical, &fir.symbols).and_then(|s| s.def) {
+                        push_edge(fir, (def_id, id));
+                    }
+                    if let Some(func_id) = current_fn {
+                        fn_returns.entry(func_id).or_default().push(id);
+                    }
                 }
             }
         }
@@ -2859,20 +2855,21 @@ pub fn build(
         }
         for (dest, callee) in dfg.call_returns.clone() {
             if let Some(rets) = fn_returns.get(&callee) {
-                let mut sanit = false;
+                // A call site is sanitized only when ALL return paths are sanitized.
+                let mut all_sanit = !rets.is_empty();
                 for &r in rets {
                     dfg.edges.push((r, dest));
-                    if dfg
+                    if !dfg
                         .nodes
                         .iter()
                         .find(|n| n.id == r)
                         .map(|n| n.sanitized)
                         .unwrap_or(false)
                     {
-                        sanit = true;
+                        all_sanit = false;
                     }
                 }
-                if sanit {
+                if all_sanit {
                     if let Some(dnode) = dfg.nodes.iter_mut().find(|n| n.id == dest) {
                         dnode.sanitized = true;
                     }

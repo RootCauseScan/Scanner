@@ -1620,3 +1620,88 @@ class T {
         assert!(sym.sanitized, "val from map with only literal value must be sanitized");
     }
 }
+
+// -------------------------------------------------------------------
+// Inter-procedural: mixed-return path sanitization
+// -------------------------------------------------------------------
+
+#[test]
+fn method_with_mixed_returns_call_site_is_tainted() {
+    // When a private method has one tainted return path and one safe path,
+    // the call site must NOT be marked sanitized (false-negative risk).
+    let code = r#"
+class T {
+    String process(String raw, boolean flag) {
+        if (flag) return raw;   // tainted path
+        return "safe";          // safe path
+    }
+    void run(String userInput) {
+        String val = process(userInput, true);
+        sink(val);
+    }
+}
+"#;
+    let fir = parse_snippet(code);
+    if let Some(sym) = fir.symbols.get("val") {
+        assert!(!sym.sanitized, "call to method with tainted return path must not be sanitized");
+    }
+}
+
+#[test]
+fn method_with_all_safe_returns_call_site_is_sanitized() {
+    let code = r#"
+class T {
+    String safe(boolean flag) {
+        if (flag) return "a";
+        return "b";
+    }
+    void run() {
+        String val = safe(true);
+        sink(val);
+    }
+}
+"#;
+    let fir = parse_snippet(code);
+    if let Some(sym) = fir.symbols.get("val") {
+        assert!(sym.sanitized, "call to method with all-literal returns must be sanitized");
+    }
+}
+
+// -------------------------------------------------------------------
+// Chained method on tainted receiver preserves taint
+// -------------------------------------------------------------------
+
+#[test]
+fn chained_method_on_tainted_string_is_tainted() {
+    // raw.trim().toLowerCase() — neither trim() nor toLowerCase() sanitizes;
+    // the taint from raw must flow through to the result.
+    let code = r#"
+class T {
+    void run(String raw) {
+        String val = raw.trim().toLowerCase();
+        sink(val);
+    }
+}
+"#;
+    let fir = parse_snippet(code);
+    if let Some(sym) = fir.symbols.get("val") {
+        assert!(!sym.sanitized, "chained non-sanitizing methods on tainted string must remain tainted");
+    }
+}
+
+#[test]
+fn chained_method_on_literal_is_sanitized() {
+    let code = r#"
+class T {
+    void run() {
+        String val = "safe".trim().toLowerCase();
+        sink(val);
+    }
+}
+"#;
+    let fir = parse_snippet(code);
+    if let Some(sym) = fir.symbols.get("val") {
+        assert!(sym.sanitized, "chained methods on a string literal must be sanitized");
+    }
+}
+
