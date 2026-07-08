@@ -172,6 +172,14 @@ fn gather_ids(node: Node, src: &str, out: &mut Vec<String>) {
             }
             return;
         }
+        "instanceof_expression" => {
+            // `left instanceof Type name` — only the tested expression (left) is a use;
+            // `name` is a newly BOUND variable (a declaration), not a reference to read.
+            if let Some(left) = node.child_by_field_name("left") {
+                gather_ids(left, src, out);
+            }
+            return;
+        }
         "ternary_expression" => {
             // The condition determines WHICH branch is taken but doesn't flow into the value;
             // collect identifiers only from the two value branches.
@@ -598,8 +606,13 @@ fn build_dfg(
                                         }
                                         if !call_sanitizer {
                                             gather_ids(val, src, &mut ids);
+                                            if vk == "object_creation_expression"
+                                                && ids.is_empty()
+                                            {
+                                                sanitized = true;
+                                            }
                                         }
-                                        sanitized = call_sanitizer;
+                                        sanitized = call_sanitizer || sanitized;
                                     }
                                 }
                                 let field_key = format!("this.{var}");
@@ -680,6 +693,101 @@ fn build_dfg(
             }
             return;
         }
+        // try-with-resources: `try (InputStream in = req.getInputStream()) { ... }`
+        // The `resource` node has `type`, `name`, and `value` fields — track it like a local var.
+        "resource" => {
+            if let Some(name_node) = node.child_by_field_name("name") {
+                if let Ok(var) = name_node.utf8_text(src.as_bytes()) {
+                    let mut ids = Vec::new();
+                    let mut sanitized = false;
+                    if let Some(val) = node.child_by_field_name("value") {
+                        let vkind = val.kind();
+                        if vkind != "lambda_expression" && vkind != "method_reference" {
+                            if vkind.ends_with("_literal")
+                                || vkind == "true"
+                                || vkind == "false"
+                                || vkind == "null_literal"
+                                || is_constant_expression(val)
+                            {
+                                sanitized = true;
+                            } else {
+                                let mut call_sanitizer = false;
+                                if let Some(call) = extract_call_path(val, src) {
+                                    if resolve_import(&call, imports, wildcards)
+                                        .into_iter()
+                                        .chain(std::iter::once(call.clone()))
+                                        .any(|f| {
+                                            catalog_module::is_sanitizer("java", &f)
+                                                || matches!(
+                                                    fir.symbol_types.get(&f),
+                                                    Some(SymbolKind::Sanitizer)
+                                                )
+                                        })
+                                    {
+                                        sanitized = true;
+                                        call_sanitizer = true;
+                                    }
+                                    if let Some(args) = val.child_by_field_name("arguments") {
+                                        gather_ids(args, src, &mut ids);
+                                    }
+                                    if !call_sanitizer {
+                                        gather_ids(val, src, &mut ids);
+                                    }
+                                } else {
+                                    gather_ids(val, src, &mut ids);
+                                    if vkind == "object_creation_expression" && ids.is_empty() {
+                                        sanitized = true;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    let (id, res_line) =
+                        stable_node_id2(fir, Some(name_node), &format!("resource:{var}"));
+                    push_node(
+                        fir,
+                        DFNode {
+                            id,
+                            name: var.to_string(),
+                            kind: DFNodeKind::Def,
+                            sanitized,
+                            branch: branch_stack.last().copied(),
+                            line: res_line,
+                            ..Default::default()
+                        },
+                    );
+                    let sym = fir.symbols.entry(var.to_string()).or_insert_with(|| Symbol {
+                        name: var.to_string(),
+                        sanitized: false,
+                        def: None,
+                        alias_of: None,
+                    });
+                    sym.sanitized = sanitized;
+                    sym.def = Some(id);
+                    sym.alias_of = None;
+                    for src_name in &ids {
+                        let canonical = resolve_alias(src_name, &fir.symbols);
+                        if let Some(def_id) =
+                            find_symbol(&canonical, &fir.symbols).and_then(|s| s.def)
+                        {
+                            push_edge(fir, (def_id, id));
+                        }
+                    }
+                    if let Some(val) = node.child_by_field_name("value") {
+                        if val.kind() != "lambda_expression" && val.kind() != "method_reference" {
+                            if let Some(call) = extract_call_path(val, src) {
+                                if let Some(&callee_id) =
+                                    fn_ids.get(call.rsplit('.').next().unwrap_or(&call))
+                                {
+                                    push_call_return(fir, (id, callee_id));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            return;
+        }
         "local_variable_declaration" => {
             let mut cursor = node.walk();
             for child in node.children(&mut cursor) {
@@ -725,6 +833,13 @@ fn build_dfg(
                                             }
                                         } else {
                                             gather_ids(val, src, &mut ids);
+                                            // A freshly constructed object (e.g. new StringBuilder())
+                                            // carries no taint unless its constructor args do.
+                                            if vkind == "object_creation_expression"
+                                                && ids.is_empty()
+                                            {
+                                                sanitized = true;
+                                            }
                                         }
                                     }
                                 }
@@ -834,6 +949,11 @@ fn build_dfg(
                                     }
                                 } else {
                                     gather_ids(right, src, &mut ids);
+                                    if rkind == "object_creation_expression"
+                                        && ids.is_empty()
+                                    {
+                                        sanitized = true;
+                                    }
                                 }
                             }
                         }
@@ -1116,6 +1236,80 @@ fn build_dfg(
                     line: if_line,
                         ..Default::default()
                 });
+            // Java 16+ instanceof pattern binding: `if (obj instanceof String s)` — bind `s`
+            // to the tested expression's taint state so it's available in the consequence block.
+            // The `condition` field is a parenthesized wrapper; search for instanceof inside.
+            if let Some(cond) = node.child_by_field_name("condition") {
+                // Unwrap the parenthesized condition wrapper to get the inner expression.
+                // The `condition` field is `seq('(', expr, ')')` so the expression is
+                // accessible as the first named child.
+                let instanceof_expr = if cond.kind() == "instanceof_expression" {
+                    Some(cond)
+                } else {
+                    (0..cond.named_child_count())
+                        .filter_map(|i| cond.named_child(i))
+                        .find(|c| c.kind() == "instanceof_expression")
+                };
+                if let Some(iof) = instanceof_expr {
+                    if let Some(name_node) = iof.child_by_field_name("name") {
+                        if let Ok(pname) = name_node.utf8_text(src.as_bytes()) {
+                            let lhs_sanitized = iof
+                                .child_by_field_name("left")
+                                .map(|left| {
+                                    let mut lids = Vec::new();
+                                    gather_ids(left, src, &mut lids);
+                                    !lids.is_empty()
+                                        && lids.iter().all(|n| {
+                                            let c = resolve_alias(n, &fir.symbols);
+                                            find_symbol(&c, &fir.symbols)
+                                                .map(|s| s.sanitized)
+                                                .unwrap_or(false)
+                                        })
+                                })
+                                .unwrap_or(false);
+                            let (pid, pline) = stable_node_id2(
+                                fir,
+                                Some(name_node),
+                                &format!("instanceof_bind:{pname}"),
+                            );
+                            push_node(
+                                fir,
+                                DFNode {
+                                    id: pid,
+                                    name: pname.to_string(),
+                                    kind: DFNodeKind::Param,
+                                    sanitized: lhs_sanitized,
+                                    branch: branch_stack.last().copied(),
+                                    line: pline,
+                                    ..Default::default()
+                                },
+                            );
+                            fir.symbols.insert(
+                                pname.to_string(),
+                                Symbol {
+                                    name: pname.to_string(),
+                                    sanitized: lhs_sanitized,
+                                    def: Some(pid),
+                                    alias_of: None,
+                                },
+                            );
+                            if let Some(left) = iof.child_by_field_name("left") {
+                                let mut lids = Vec::new();
+                                gather_ids(left, src, &mut lids);
+                                for lname in lids {
+                                    let canonical = resolve_alias(&lname, &fir.symbols);
+                                    if let Some(def_id) =
+                                        find_symbol(&canonical, &fir.symbols).and_then(|s| s.def)
+                                    {
+                                        push_edge(fir, (def_id, pid));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             let before = fir.symbols.clone();
             let mut branch_states: Vec<HashMap<String, Symbol>> = Vec::new();
             if let Some(cons) = node.child_by_field_name("consequence") {
