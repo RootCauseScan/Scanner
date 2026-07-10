@@ -128,7 +128,7 @@ pub struct ScanArgs {
     #[arg(short = 'l', long = "languages", value_delimiter = ',', value_parser = parse_language)]
     pub languages: Vec<String>,
     /// Download official rules automatically when missing
-    #[arg(long = "download-rules")]
+    #[arg(long = "download-rules", hide = true)]
     pub download_rules: bool,
     /// True if `--rules` was explicitly provided.
     #[arg(skip = false)]
@@ -140,49 +140,49 @@ pub struct ScanArgs {
     #[arg(long = "fail-on", value_parser = parse_severity)]
     pub fail_on: Option<Severity>,
     /// Number of parallel threads to use for scanning
-    #[arg(long, default_value_t = default_threads(), value_parser = parse_threads)]
+    #[arg(long, default_value_t = default_threads(), value_parser = parse_threads, hide = true)]
     pub threads: usize,
     /// Exclude files matching these patterns (supports regex)
     #[arg(long, value_parser = crate::parse_exclude, value_delimiter = ',')]
     pub exclude: Vec<IgnorePattern>,
     /// Don't use default exclusion patterns
-    #[arg(long)]
+    #[arg(long, hide = true)]
     pub no_default_exclude: bool,
     /// Maximum file size to scan (in bytes)
-    #[arg(long, default_value_t = DEFAULT_MAX_FILE_SIZE)]
+    #[arg(long, default_value_t = DEFAULT_MAX_FILE_SIZE, hide = true)]
     pub max_file_size: u64,
     /// Timeout per rule-vs-file operation in milliseconds
-    #[arg(long)]
+    #[arg(long, hide = true)]
     pub timeout_operation_ms: Option<u64>,
     /// Write performance metrics to file
-    #[arg(long)]
+    #[arg(long, hide = true)]
     pub metrics: Option<PathBuf>,
     /// Path to baseline file for comparison
-    #[arg(long)]
+    #[arg(long, hide = true)]
     pub baseline: Option<PathBuf>,
     /// Write baseline file with current findings
-    #[arg(long = "write-baseline")]
+    #[arg(long = "write-baseline", hide = true)]
     pub write_baseline: Option<PathBuf>,
     /// Load plugins from specified paths
-    #[arg(long = "plugin")]
+    #[arg(long = "plugin", hide = true)]
     pub plugins: Vec<PathBuf>,
     /// Plugin options as key=value pairs
-    #[arg(long = "plugin-opt")]
+    #[arg(long = "plugin-opt", hide = true)]
     pub plugin_opts: Vec<String>,
     /// Path to plugin configuration file
-    #[arg(long = "plugin-config")]
+    #[arg(long = "plugin-config", hide = true)]
     pub plugin_config: Option<PathBuf>,
     /// Comment pattern to suppress findings
-    #[arg(long = "suppress-comment", default_value = "sast-ignore")]
+    #[arg(long = "suppress-comment", default_value = "sast-ignore", hide = true)]
     pub suppress_comment: String,
     /// Enable streaming mode for large outputs
-    #[arg(long)]
+    #[arg(long, hide = true)]
     pub stream: bool,
     /// Number of findings to process in each chunk
-    #[arg(long, default_value_t = 100, value_parser = parse_chunk_size)]
+    #[arg(long, default_value_t = 100, value_parser = parse_chunk_size, hide = true)]
     pub chunk_size: usize,
     /// Dump taint analysis data for debugging
-    #[arg(long = "dump-taints")]
+    #[arg(long = "dump-taints", hide = true)]
     pub dump_taints: bool,
     /// Enable debug output
     #[arg(long)]
@@ -194,7 +194,7 @@ pub struct ScanArgs {
     #[arg(long = "apply-fixes")]
     pub apply_fixes: bool,
     /// Directory to store cache files
-    #[arg(long = "cache-dir")]
+    #[arg(long = "cache-dir", hide = true)]
     pub cache_dir: Option<PathBuf>,
 }
 
