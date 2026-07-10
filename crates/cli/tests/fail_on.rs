@@ -50,6 +50,7 @@ fn fail_on_threshold_controls_exit_code() -> Result<(), Box<dyn std::error::Erro
         quiet: true,
         apply_fixes: false,
         cache_dir: None,
+        no_prefilter: false,
     };
 
     let mut low_threshold = base_args;
@@ -84,6 +85,7 @@ fn fail_on_threshold_controls_exit_code() -> Result<(), Box<dyn std::error::Erro
         quiet: true,
         apply_fixes: false,
         cache_dir: None,
+        no_prefilter: false,
     };
     let high_outcome = run_scan(high_threshold)?;
     assert!(!high_outcome.should_fail_ci);

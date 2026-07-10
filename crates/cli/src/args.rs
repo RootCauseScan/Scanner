@@ -196,6 +196,11 @@ pub struct ScanArgs {
     /// Directory to store cache files
     #[arg(long = "cache-dir", hide = true)]
     pub cache_dir: Option<PathBuf>,
+    /// Disable the literal prefilter (evaluate every rule against every file).
+    /// Debugging aid to compare results/timings; the prefilter only skips rules
+    /// that provably cannot match, so this should not change findings.
+    #[arg(long = "no-prefilter", hide = true)]
+    pub no_prefilter: bool,
 }
 
 #[derive(Subcommand)]

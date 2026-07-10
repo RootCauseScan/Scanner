@@ -449,6 +449,8 @@ pub fn run_scan(mut args: ScanArgs) -> anyhow::Result<ScanOutcome> {
         debug!("Debug mode enabled");
     }
 
+    engine::set_prefilter_disabled(args.no_prefilter);
+
     // Always show header in text format, regardless of quiet mode
     if args.format == Format::Text || !args.quiet {
         ui::print_header();

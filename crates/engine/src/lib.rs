@@ -18,7 +18,7 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::thread_local;
 use std::time::{Duration, Instant};
@@ -524,6 +524,9 @@ struct ApplicableRuleIndex<'a> {
     generic: Arc<[&'a CompiledRule]>,
     by_language: HashMap<String, Arc<[&'a CompiledRule]>>,
     empty: Arc<[&'a CompiledRule]>,
+    /// Required-literals prefilter per rule, computed once. Keyed by the rule
+    /// reference address (rules live for `'a`, so the pointer is stable).
+    prefilters: HashMap<usize, Option<Vec<Vec<String>>>>,
 }
 
 impl<'a> ApplicableRuleIndex<'a> {
@@ -532,6 +535,11 @@ impl<'a> ApplicableRuleIndex<'a> {
         let mut generic_entries: Vec<(usize, &'a CompiledRule)> = Vec::new();
         let mut by_language_entries: HashMap<String, Vec<(usize, &'a CompiledRule)>> =
             HashMap::new();
+        let prefilters: HashMap<usize, Option<Vec<Vec<String>>>> = rules
+            .rules
+            .iter()
+            .map(|rule| (rule as *const CompiledRule as usize, rule_prefilter(rule)))
+            .collect();
 
         for (idx, rule) in rules.rules.iter().enumerate() {
             if rule.languages.iter().any(|lang| lang == GENERIC_LANGUAGE) {
@@ -587,6 +595,22 @@ impl<'a> ApplicableRuleIndex<'a> {
             generic,
             by_language,
             empty,
+            prefilters,
+        }
+    }
+
+    /// Cheap necessary-condition check: returns `false` only when the rule
+    /// provably cannot match this file (none of its required-literal clauses
+    /// are present), so it is safe to skip evaluation. Honors the global
+    /// `--no-prefilter` override.
+    fn prefilter_allows(&self, rule: &CompiledRule, file: &FileIR) -> bool {
+        if prefilter_disabled() {
+            return true;
+        }
+        match self.prefilters.get(&(rule as *const CompiledRule as usize)) {
+            Some(Some(dnf)) => prefilter_allows(dnf, &prefilter_haystack(file)),
+            // `None` prefilter (unfilterable) or rule not indexed → always run.
+            _ => true,
         }
     }
 
@@ -677,12 +701,174 @@ fn dedup_findings(findings: &mut Vec<Finding>) {
 static RULE_CACHE: OnceLock<RuleCache> = OnceLock::new();
 static RULE_CACHE_RUNTIME_CAPACITY: AtomicUsize = AtomicUsize::new(1024);
 static SLOW_RULE_DELAYS: OnceLock<Mutex<HashMap<String, Duration>>> = OnceLock::new();
+static PREFILTER_DISABLED: AtomicBool = AtomicBool::new(false);
 
 pub const RULE_CACHE_CAPACITY: usize = 1024;
 
 pub fn set_rule_cache_capacity(n: usize) {
     RULE_CACHE_RUNTIME_CAPACITY.store(n, Ordering::Relaxed);
     reset_rule_cache();
+}
+
+/// Disables the literal prefilter (used by `--no-prefilter` for debugging).
+///
+/// When enabled (the default), a rule is skipped for a file whose source
+/// cannot contain any of the rule's required literals — a necessary
+/// condition for a match, so this never drops a real finding.
+pub fn set_prefilter_disabled(disabled: bool) {
+    PREFILTER_DISABLED.store(disabled, Ordering::Relaxed);
+}
+
+fn prefilter_disabled() -> bool {
+    PREFILTER_DISABLED.load(Ordering::Relaxed)
+}
+
+/// Minimum identifier length kept as a required literal. Shorter tokens carry
+/// little discriminating power and are often regex fragments; dropping them
+/// only makes the prefilter more permissive (still sound).
+const PREFILTER_MIN_LITERAL_LEN: usize = 3;
+
+/// Splits a semgrep pattern string into the concrete identifier tokens it
+/// requires, or returns empty when the text cannot be reduced soundly.
+///
+/// Sound for structural `pattern:` text (metavariables `$X` and the ellipsis
+/// `...` are the only variable parts, so every other identifier must appear
+/// verbatim). Raw-regex text is *not* safe: alternation (`|`), optional (`?`),
+/// star (`*`) and `{0,n}` quantifiers can make an identifier non-required, and
+/// character classes (`[...]`) are ranges, not literals. On any of those
+/// signals we bail to empty ("unextractable"), and the caller then runs the
+/// rule unconditionally — never a false negative.
+fn pattern_required_literals(text: &str) -> Vec<String> {
+    // Ubiquitous Java tokens carry no discriminating power; dropping them only
+    // makes the prefilter more permissive (still sound), and avoids clauses
+    // that every file trivially satisfies.
+    const COMMON: &[&str] = &[
+        "new", "return", "void", "public", "private", "protected", "static", "final", "if", "else",
+        "for", "while", "class", "interface", "extends", "implements", "import", "package",
+        "throws", "throw", "try", "catch", "String", "int", "long", "boolean", "this", "super",
+        "null", "true", "false",
+    ];
+    let bytes = text.as_bytes();
+    // Bail on regex-danger signals that break the "identifier is required"
+    // assumption: alternation, optional, star, and `{`-quantifiers.
+    for (idx, &c) in bytes.iter().enumerate() {
+        if c == b'|' || c == b'?' || c == b'*' {
+            return Vec::new();
+        }
+        if c == b'{' && bytes.get(idx + 1).is_some_and(u8::is_ascii_digit) {
+            return Vec::new();
+        }
+    }
+    let mut literals = Vec::new();
+    let mut i = 0;
+    let mut in_class = false;
+    while i < bytes.len() {
+        let c = bytes[i];
+        // Skip the interior of a character class `[...]` (ranges, not literals).
+        if c == b'[' {
+            in_class = true;
+            i += 1;
+            continue;
+        }
+        if c == b']' {
+            in_class = false;
+            i += 1;
+            continue;
+        }
+        if in_class {
+            i += 1;
+            continue;
+        }
+        if c == b'$' {
+            // Skip a metavariable ($NAME) whole.
+            i += 1;
+            while i < bytes.len() && (bytes[i] == b'_' || bytes[i].is_ascii_alphanumeric()) {
+                i += 1;
+            }
+            continue;
+        }
+        if c == b'_' || c.is_ascii_alphabetic() {
+            let start = i;
+            while i < bytes.len() && (bytes[i] == b'_' || bytes[i].is_ascii_alphanumeric()) {
+                i += 1;
+            }
+            let tok = &text[start..i];
+            if tok.len() >= PREFILTER_MIN_LITERAL_LEN
+                && !COMMON.contains(&tok)
+                && !literals.iter().any(|t| t == tok)
+            {
+                literals.push(tok.to_string());
+            }
+            continue;
+        }
+        i += 1;
+    }
+    literals
+}
+
+/// Builds a required-literals prefilter (DNF: OR of clauses, each an AND of
+/// substrings) from a compiled rule, or `None` when no sound prefilter can be
+/// derived (the rule then always runs).
+///
+/// A rule can only match if at least one clause is fully present in the file
+/// source, so skipping when no clause matches never drops a real finding. If
+/// any positive alternative yields no literals, the whole prefilter is dropped
+/// to stay conservative.
+fn rule_prefilter(rule: &CompiledRule) -> Option<Vec<Vec<String>>> {
+    let mut clauses: Vec<Vec<String>> = Vec::new();
+    match &rule.matcher {
+        MatcherKind::TextRegex(_, text) => {
+            let lits = pattern_required_literals(text);
+            if lits.is_empty() {
+                return None;
+            }
+            clauses.push(lits);
+        }
+        MatcherKind::TextRegexMulti { subs } => {
+            for sub in subs {
+                // Each `allow` alternative is one OR-branch; ignore inside /
+                // not_inside / deny (negative or context-only) for soundness.
+                for (_, text) in &sub.allow {
+                    let lits = pattern_required_literals(text);
+                    if lits.is_empty() {
+                        return None;
+                    }
+                    clauses.push(lits);
+                }
+            }
+        }
+        MatcherKind::TaintRule { .. } => {
+            // A taint finding needs at least one sink to match, so its name must
+            // appear. Each sink name is its own single-literal clause.
+            for sink in &rule.sinks {
+                if sink.is_empty() {
+                    return None;
+                }
+                clauses.push(vec![sink.clone()]);
+            }
+        }
+        // Structural / WASM / JSONPath matchers keep no recoverable literals.
+        _ => return None,
+    }
+    if clauses.is_empty() {
+        None
+    } else {
+        Some(clauses)
+    }
+}
+
+/// Returns the haystack used for literal membership tests: the raw source when
+/// available, else the serialized nodes (mirrors the TextRegex matcher input).
+fn prefilter_haystack(file: &FileIR) -> std::borrow::Cow<'_, str> {
+    match &file.source {
+        Some(s) => std::borrow::Cow::Borrowed(s.as_str()),
+        None => std::borrow::Cow::Owned(serde_json::to_string(&file.nodes).unwrap_or_default()),
+    }
+}
+
+fn prefilter_allows(dnf: &[Vec<String>], haystack: &str) -> bool {
+    dnf.iter()
+        .any(|clause| clause.iter().all(|lit| haystack.contains(lit.as_str())))
 }
 
 pub fn register_slow_rule_delay(rule_id: &str, delay: Duration) {
@@ -708,6 +894,13 @@ pub fn rule_cache_stats() -> (usize, usize) {
 }
 
 pub fn eval_rule(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
+    let content_hash = cache::hash_file(file);
+    eval_rule_with_hash(file, rule, &content_hash)
+}
+
+/// Like [`eval_rule`] but reuses a precomputed content hash, so the O(filesize)
+/// hashing is paid once per file instead of once per (rule × file).
+pub fn eval_rule_with_hash(file: &FileIR, rule: &CompiledRule, content_hash: &str) -> Vec<Finding> {
     debug!(
         "eval_rule: Starting evaluation of rule '{}' for file '{}'",
         rule.id, file.file_path
@@ -715,7 +908,7 @@ pub fn eval_rule(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
     let key = RuleCacheKey {
         file: PathBuf::from(&file.file_path),
         rule_id: rule.id.clone(),
-        content_hash: cache::hash_file(file),
+        content_hash: content_hash.to_string(),
     };
 
     let cap = RULE_CACHE_RUNTIME_CAPACITY.load(Ordering::Relaxed);
@@ -1030,6 +1223,8 @@ fn use_aliases(file: &FileIR) -> Vec<(String, String)> {
 fn analyze_file_inner(file: &FileIR, rule_index: &ApplicableRuleIndex<'_>) -> Vec<Finding> {
     init_tokio();
     let applicable_rules = rule_index.rules_for(&file.file_type);
+    // Hash the file once and reuse it for every rule's cache key.
+    let content_hash = cache::hash_file(file);
     debug!(
         "Analyzing file '{}' with {} applicable rules (total rules: {})",
         file.file_path,
@@ -1040,9 +1235,10 @@ fn analyze_file_inner(file: &FileIR, rule_index: &ApplicableRuleIndex<'_>) -> Ve
     let findings: Vec<Finding> = applicable_rules
         .iter()
         .copied()
+        .filter(|r| rule_index.prefilter_allows(r, file))
         .flat_map(|r| {
             debug!("Evaluating rule '{}' for file '{}'", r.id, file.file_path);
-            let result = eval_rule(file, r);
+            let result = eval_rule_with_hash(file, r, &content_hash);
             debug!(
                 "Rule '{}' evaluation completed for file '{}', found {} findings",
                 r.id,
@@ -1468,7 +1664,13 @@ fn analyze_file_with_config_inner(
         None
     };
     let applicable_rules = rule_index.rules_for(&file.file_type);
+    // Hash the file once and reuse it for every rule's cache key.
+    let content_hash: Arc<str> = Arc::from(cache::hash_file(file).as_str());
     for r in applicable_rules.iter().copied() {
+        // Skip rules that provably cannot match this file (sound prefilter).
+        if !rule_index.prefilter_allows(r, file) {
+            continue;
+        }
         debug!("Evaluating rule '{}' on file '{}'", r.id, file.file_path);
         let rule_start = Instant::now();
         let findings = if let Some(rt) = operation_timeout {
@@ -1480,8 +1682,11 @@ fn analyze_file_with_config_inner(
                 let file_cloned =
                     Arc::clone(file_arc.as_ref().expect("rule timeout implies shared file"));
                 let rule_cloned = Arc::new(r.clone());
+                let hash_cloned = Arc::clone(&content_hash);
                 pool.spawn(move || {
-                    let res = std::panic::catch_unwind(|| eval_rule(&file_cloned, &rule_cloned));
+                    let res = std::panic::catch_unwind(|| {
+                        eval_rule_with_hash(&file_cloned, &rule_cloned, &hash_cloned)
+                    });
                     let _ = tx.send(res);
                 });
                 match rx.recv_timeout(rt) {
@@ -1511,7 +1716,7 @@ fn analyze_file_with_config_inner(
                 }
             }
         } else {
-            eval_rule(file, r)
+            eval_rule_with_hash(file, r, &content_hash)
         };
         if let Some(m) = metrics.as_deref_mut() {
             let elapsed = rule_start.elapsed().as_millis();
