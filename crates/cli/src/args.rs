@@ -31,6 +31,15 @@ fn parse_threads(s: &str) -> Result<usize, String> {
     }
 }
 
+fn parse_language(s: &str) -> Result<String, String> {
+    parsers::canonical_language(s).map(str::to_string).ok_or_else(|| {
+        format!(
+            "unknown language '{s}'; supported: {}",
+            parsers::SUPPORTED_LANGUAGES.join(", ")
+        )
+    })
+}
+
 fn parse_chunk_size(s: &str) -> Result<usize, String> {
     let v: usize = s
         .parse()
@@ -112,6 +121,12 @@ pub struct ScanArgs {
     /// Path to rules directory or ruleset
     #[arg(long, default_value_os_t = default_rules_path())]
     pub rules: PathBuf,
+    /// Restrict the scan to these languages (comma-separated, e.g. `java,php,javascript`).
+    /// Common aliases like `js`/`ts`/`py` are accepted. When omitted, every detected
+    /// language is scanned. Language-specific rules for the selected languages plus
+    /// generic content rules are applied; files of other languages are skipped.
+    #[arg(short = 'l', long = "languages", value_delimiter = ',', value_parser = parse_language)]
+    pub languages: Vec<String>,
     /// Download official rules automatically when missing
     #[arg(long = "download-rules")]
     pub download_rules: bool,

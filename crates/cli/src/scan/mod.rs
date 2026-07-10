@@ -527,6 +527,22 @@ maintainer = "RootCause Security Team <contact@rootcause.dev>"
         args.rules = official_rules_dir;
     }
 
+    // Optional language selection: when `--languages` is given, only files whose
+    // detected language is in the set are scanned. `None` means "all languages".
+    let selected_languages: Option<HashSet<String>> = if args.languages.is_empty() {
+        None
+    } else {
+        Some(args.languages.iter().map(|l| l.to_ascii_lowercase()).collect())
+    };
+    let language_allowed = |language: Option<&str>| -> bool {
+        match &selected_languages {
+            None => true,
+            Some(set) => language
+                .map(|l| set.contains(&l.to_ascii_lowercase()))
+                .unwrap_or(false),
+        }
+    };
+
     // Collect file paths (core collector)
     let mut files: Vec<InputFile> = Vec::new();
     let mut file_index: HashMap<PathBuf, usize> = HashMap::new();
@@ -539,13 +555,14 @@ maintainer = "RootCause Security Team <contact@rootcause.dev>"
         &path,
         &|p| is_excluded(p, &patterns, args.max_file_size),
         &mut |p| {
-            if parsers::detect_type(p).is_some() {
+            let detected = parsers::detect_type(p);
+            if detected.is_some() && language_allowed(detected) {
                 let path_buf = p.to_path_buf();
                 let idx = files.len();
                 files.push(InputFile {
                     path: path_buf.clone(),
                     content_b64: None,
-                    language: parsers::detect_type(p).map(str::to_string),
+                    language: detected.map(str::to_string),
                     notes: Vec::new(),
                 });
                 file_index.insert(path_buf, idx);
@@ -553,6 +570,11 @@ maintainer = "RootCause Security Team <contact@rootcause.dev>"
             Ok(())
         },
     )?;
+    if let Some(set) = &selected_languages {
+        let mut selected: Vec<&str> = set.iter().map(String::as_str).collect();
+        selected.sort_unstable();
+        info!(languages = %selected.join(","), files = files.len(), "Language filter active");
+    }
     // Run discover plugins before analysis to augment the file list
     if !manager.discoverers().is_empty() {
         let mut discovered = 0usize;
@@ -573,6 +595,13 @@ maintainer = "RootCause Security Team <contact@rootcause.dev>"
                         }
                         let p = p.canonicalize().unwrap_or(p);
                         if file_index.contains_key(&p) {
+                            continue;
+                        }
+                        let discovered_lang = f
+                            .language
+                            .as_deref()
+                            .or_else(|| parsers::detect_type(&p));
+                        if !language_allowed(discovered_lang) {
                             continue;
                         }
                         let idx = files.len();

@@ -72,6 +72,57 @@ pub fn detect_type(path: &Path) -> Option<&'static str> {
     detected
 }
 
+/// Canonical language identifiers understood by the scanner.
+///
+/// Kept next to [`detect_type`] on purpose: any language added there must be
+/// reflected here so the CLI `--languages` selector and the rule/file filters
+/// stay in sync.
+pub const SUPPORTED_LANGUAGES: &[&str] = &[
+    "dockerfile",
+    "yaml",
+    "json",
+    "hcl",
+    "typescript",
+    "javascript",
+    "python",
+    "go",
+    "ruby",
+    "rust",
+    "java",
+    "php",
+    "generic",
+];
+
+/// Maps a user-provided language name or common alias to its canonical id,
+/// or `None` when the name is not recognised.
+///
+/// # Example
+/// ```
+/// assert_eq!(parsers::canonical_language("js"), Some("javascript"));
+/// assert_eq!(parsers::canonical_language("Java"), Some("java"));
+/// assert_eq!(parsers::canonical_language("cobol"), None);
+/// ```
+pub fn canonical_language(name: &str) -> Option<&'static str> {
+    let normalized = name.trim().to_ascii_lowercase();
+    let canonical = match normalized.as_str() {
+        "dockerfile" | "docker" => "dockerfile",
+        "yaml" | "yml" => "yaml",
+        "json" => "json",
+        "hcl" | "tf" | "terraform" => "hcl",
+        "typescript" | "ts" | "tsx" => "typescript",
+        "javascript" | "js" | "jsx" => "javascript",
+        "python" | "py" => "python",
+        "go" | "golang" => "go",
+        "ruby" | "rb" => "ruby",
+        "rust" | "rs" => "rust",
+        "java" => "java",
+        "php" => "php",
+        "generic" => "generic",
+        _ => return None,
+    };
+    Some(canonical)
+}
+
 /// Analiza contenido YAML desde una cadena y genera un [`FileIR`].
 ///
 /// # Example

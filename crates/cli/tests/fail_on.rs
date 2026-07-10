@@ -26,6 +26,7 @@ fn fail_on_threshold_controls_exit_code() -> Result<(), Box<dyn std::error::Erro
     let base_args = ScanArgs {
         path: test_file.clone(),
         rules: rules_dir.clone(),
+        languages: vec![],
         download_rules: false,
         rules_provided: true,
         format: Format::Json,
@@ -59,6 +60,7 @@ fn fail_on_threshold_controls_exit_code() -> Result<(), Box<dyn std::error::Erro
     let high_threshold = ScanArgs {
         path: test_file,
         rules: rules_dir,
+        languages: vec![],
         download_rules: false,
         rules_provided: true,
         format: Format::Json,
