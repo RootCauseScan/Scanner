@@ -53,6 +53,17 @@ pub struct SemgrepRule {
     pub languages: Option<Vec<String>>,
     #[serde(default)]
     pub options: RuleOptions,
+    #[serde(default)]
+    pub paths: Option<SemgrepPaths>,
+}
+
+/// `paths:` block of a semgrep rule: include/exclude path globs.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SemgrepPaths {
+    #[serde(default)]
+    pub include: Vec<String>,
+    #[serde(default)]
+    pub exclude: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1035,6 +1046,14 @@ pub(crate) fn compile_semgrep_rule(
 ) -> anyhow::Result<()> {
     if !seen.insert(sr.id.clone()) {
         bail!("duplicate rule id: {}", sr.id);
+    }
+    // Record the rule's `paths:` scope (if any) so the engine can skip files
+    // outside it. Captured before `sr` is consumed by matcher compilation.
+    if let Some(paths) = &sr.paths {
+        let spec = crate::PathSpec::from_globs(&paths.include, &paths.exclude);
+        if !spec.is_empty() {
+            rs.rule_paths.insert(sr.id.clone(), spec);
+        }
     }
     debug!(
         "Compiling Semgrep rule: {} from file: {}",

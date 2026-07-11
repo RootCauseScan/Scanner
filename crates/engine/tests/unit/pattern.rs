@@ -56,6 +56,7 @@ fn match_eval_inside_function() {
     let file = load_fixture("bad");
     let rules = RuleSet {
         rules: vec![build_rule()],
+        ..Default::default()
     };
     let findings = analyze_file(&file, &rules);
     assert_eq!(findings.len(), 1);
@@ -66,6 +67,7 @@ fn ignore_eval_outside_function() {
     let file = load_fixture("fp");
     let rules = RuleSet {
         rules: vec![build_rule()],
+        ..Default::default()
     };
     let findings = analyze_file(&file, &rules);
     assert!(findings.is_empty());
@@ -76,6 +78,7 @@ fn ignore_other_calls() {
     let file = load_fixture("good");
     let rules = RuleSet {
         rules: vec![build_rule()],
+        ..Default::default()
     };
     let findings = analyze_file(&file, &rules);
     assert!(findings.is_empty());

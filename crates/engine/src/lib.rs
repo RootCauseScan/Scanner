@@ -527,6 +527,9 @@ struct ApplicableRuleIndex<'a> {
     /// Required-literals prefilter per rule, computed once. Keyed by the rule
     /// reference address (rules live for `'a`, so the pointer is stable).
     prefilters: HashMap<usize, Option<Vec<Vec<String>>>>,
+    /// `paths:` scope per rule, keyed by the rule reference address. Absent when
+    /// the rule has no path constraint.
+    paths: HashMap<usize, &'a loader::PathSpec>,
 }
 
 impl<'a> ApplicableRuleIndex<'a> {
@@ -539,6 +542,16 @@ impl<'a> ApplicableRuleIndex<'a> {
             .rules
             .iter()
             .map(|rule| (rule as *const CompiledRule as usize, rule_prefilter(rule)))
+            .collect();
+        let paths: HashMap<usize, &'a loader::PathSpec> = rules
+            .rules
+            .iter()
+            .filter_map(|rule| {
+                rules
+                    .rule_paths
+                    .get(&rule.id)
+                    .map(|spec| (rule as *const CompiledRule as usize, spec))
+            })
             .collect();
 
         for (idx, rule) in rules.rules.iter().enumerate() {
@@ -596,6 +609,7 @@ impl<'a> ApplicableRuleIndex<'a> {
             by_language,
             empty,
             prefilters,
+            paths,
         }
     }
 
@@ -611,6 +625,15 @@ impl<'a> ApplicableRuleIndex<'a> {
             Some(Some(dnf)) => prefilter_allows(dnf, &prefilter_haystack(file)),
             // `None` prefilter (unfilterable) or rule not indexed → always run.
             _ => true,
+        }
+    }
+
+    /// Honors a rule's `paths:` include/exclude scope: returns `false` when the
+    /// file is outside the rule's declared paths, so it is skipped entirely.
+    fn path_allows(&self, rule: &CompiledRule, file: &FileIR) -> bool {
+        match self.paths.get(&(rule as *const CompiledRule as usize)) {
+            Some(spec) => spec.allows(&file.file_path),
+            None => true,
         }
     }
 
@@ -1267,7 +1290,7 @@ fn analyze_file_inner(file: &FileIR, rule_index: &ApplicableRuleIndex<'_>) -> Ve
     let findings: Vec<Finding> = applicable_rules
         .iter()
         .copied()
-        .filter(|r| rule_index.prefilter_allows(r, file))
+        .filter(|r| rule_index.path_allows(r, file) && rule_index.prefilter_allows(r, file))
         .flat_map(|r| {
             debug!("Evaluating rule '{}' for file '{}'", r.id, file.file_path);
             let result = eval_rule_with_hash(file, r, &content_hash);
@@ -1699,8 +1722,9 @@ fn analyze_file_with_config_inner(
     // Hash the file once and reuse it for every rule's cache key.
     let content_hash: Arc<str> = Arc::from(cache::hash_file(file).as_str());
     for r in applicable_rules.iter().copied() {
-        // Skip rules that provably cannot match this file (sound prefilter).
-        if !rule_index.prefilter_allows(r, file) {
+        // Skip rules whose `paths:` scope excludes this file, then rules that
+        // provably cannot match (sound prefilter).
+        if !rule_index.path_allows(r, file) || !rule_index.prefilter_allows(r, file) {
             continue;
         }
         debug!("Evaluating rule '{}' on file '{}'", r.id, file.file_path);

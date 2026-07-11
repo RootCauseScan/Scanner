@@ -54,7 +54,7 @@ fn mk_rule() -> RuleSet {
         sinks: vec![],
         languages: vec!["python".into()],
     };
-    RuleSet { rules: vec![rule] }
+    RuleSet { rules: vec![rule], ..Default::default() }
 }
 
 #[test]

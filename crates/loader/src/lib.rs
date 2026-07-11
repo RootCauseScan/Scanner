@@ -18,7 +18,9 @@ mod walk;
 
 pub use matchers::{MatcherKind, Query, SubMatcher, TaintPattern};
 pub use regex_types::{regex_ext, AnyCaptures, AnyMatch, AnyRegex};
-pub use schema::compiled::{AstQueryRule, CompiledRule, Example, RuleOptions, RuleSet, Severity};
+pub use schema::compiled::{
+    AstQueryRule, CompiledRule, Example, PathSpec, RuleOptions, RuleSet, Severity,
+};
 pub use schema::json::{JsonQuery, JsonRule};
 pub use schema::semgrep::{
     relax_semgrep_ellipsis, semgrep_to_regex, semgrep_to_regex_exact, MetavariableRegex,

@@ -106,10 +106,93 @@ impl CompiledRule {
     }
 }
 
+/// Compiled `paths:` scope of a rule: a file is in scope when it matches at
+/// least one `include` glob (if any are given) and no `exclude` glob.
+#[derive(Debug, Clone, Default)]
+pub struct PathSpec {
+    include: Vec<regex::Regex>,
+    exclude: Vec<regex::Regex>,
+}
+
+impl PathSpec {
+    pub fn from_globs(include: &[String], exclude: &[String]) -> Self {
+        Self {
+            include: include.iter().filter_map(|g| glob_to_path_regex(g)).collect(),
+            exclude: exclude.iter().filter_map(|g| glob_to_path_regex(g)).collect(),
+        }
+    }
+
+    /// Whether this spec actually constrains anything.
+    pub fn is_empty(&self) -> bool {
+        self.include.is_empty() && self.exclude.is_empty()
+    }
+
+    /// Returns `true` when `path` is in scope for the rule.
+    pub fn allows(&self, path: &str) -> bool {
+        let p = path.replace('\\', "/");
+        if !self.include.is_empty() && !self.include.iter().any(|r| r.is_match(&p)) {
+            return false;
+        }
+        if self.exclude.iter().any(|r| r.is_match(&p)) {
+            return false;
+        }
+        true
+    }
+}
+
+/// Compiles a semgrep path glob into a regex matched against the file path.
+/// `*` and `?` stay within a path segment, `**` crosses `/`, and a trailing
+/// `/` matches a directory prefix. Anchored at a path boundary so it works
+/// against absolute paths.
+fn glob_to_path_regex(glob: &str) -> Option<regex::Regex> {
+    let g = glob.trim();
+    let dir_only = g.ends_with('/');
+    let g = g.trim_end_matches('/');
+    if g.is_empty() {
+        return None;
+    }
+    let chars: Vec<char> = g.chars().collect();
+    let mut re = String::from("(?:^|/)");
+    let mut i = 0;
+    while i < chars.len() {
+        match chars[i] {
+            '*' => {
+                if i + 1 < chars.len() && chars[i + 1] == '*' {
+                    i += 1; // consume second '*'
+                    if i + 1 < chars.len() && chars[i + 1] == '/' {
+                        re.push_str("(?:.*/)?");
+                        i += 1; // consume the '/'
+                    } else {
+                        re.push_str(".*");
+                    }
+                } else {
+                    re.push_str("[^/]*");
+                }
+            }
+            '?' => re.push_str("[^/]"),
+            c @ ('.' | '+' | '(' | ')' | '|' | '^' | '$' | '{' | '}' | '\\' | '[' | ']') => {
+                re.push('\\');
+                re.push(c);
+            }
+            c => re.push(c),
+        }
+        i += 1;
+    }
+    if dir_only {
+        re.push_str("/.*");
+    }
+    re.push('$');
+    regex::Regex::new(&re).ok()
+}
+
 #[derive(Debug, Clone, Default)]
 /// Collection of compiled rules.
 pub struct RuleSet {
     pub rules: Vec<CompiledRule>,
+    /// `paths:` scope per rule, keyed by rule id. Kept beside the rules (rather
+    /// than on `CompiledRule`) to avoid churning the many struct literals; the
+    /// engine reads it when building its rule index.
+    pub rule_paths: std::collections::HashMap<String, PathSpec>,
 }
 
 pub(crate) fn normalize_languages(langs: Option<Vec<String>>) -> Vec<String> {
@@ -401,4 +484,35 @@ fn wasm_sidecar_path(wasm_path: &Path, ext: &str) -> PathBuf {
     let side_ext = format!("wasm.{ext}");
     p.set_extension(side_ext);
     p
+}
+
+#[cfg(test)]
+mod path_spec_tests {
+    use super::PathSpec;
+
+    #[test]
+    fn include_scopes_by_extension() {
+        let spec = PathSpec::from_globs(&["*.jsp".into()], &[]);
+        assert!(spec.allows("/abs/path/page.jsp"));
+        assert!(!spec.allows("/abs/path/ci.yml"));
+    }
+
+    #[test]
+    fn globstar_and_dir_and_exclude() {
+        let inc = PathSpec::from_globs(&["**/web.xml".into()], &[]);
+        assert!(inc.allows("/a/b/web.xml"));
+        assert!(inc.allows("/web.xml"));
+        assert!(!inc.allows("/a/web.txt"));
+
+        let exc = PathSpec::from_globs(&[], &["sources/".into()]);
+        assert!(!exc.allows("/repo/sources/Foo.java"));
+        assert!(exc.allows("/repo/src/Foo.java"));
+    }
+
+    #[test]
+    fn empty_spec_allows_everything() {
+        let spec = PathSpec::from_globs(&[], &[]);
+        assert!(spec.is_empty());
+        assert!(spec.allows("/anything"));
+    }
 }

@@ -48,7 +48,7 @@ fn logs_warning_when_wasm_not_found() {
         sinks: vec![],
         languages: vec!["generic".into()],
     };
-    let rules = RuleSet { rules: vec![rule] };
+    let rules = RuleSet { rules: vec![rule], ..Default::default() };
     let output = capture_logs(|| warmup_wasm_rules(&rules));
     assert!(output.contains("failed to read WASM"), "logs: {output}");
 }
@@ -75,7 +75,7 @@ fn logs_warning_on_invalid_wasm() {
         sinks: vec![],
         languages: vec!["generic".into()],
     };
-    let rules = RuleSet { rules: vec![rule] };
+    let rules = RuleSet { rules: vec![rule], ..Default::default() };
     let output = capture_logs(|| warmup_wasm_rules(&rules));
     assert!(
         output.contains("failed to instantiate Rego WASM"),
