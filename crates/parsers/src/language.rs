@@ -29,6 +29,20 @@ pub trait Language: Sync {
     fn catalog(&self) -> Option<Catalog> {
         None
     }
+
+    /// Whether `name` is an implicitly-untrusted global input of the language
+    /// (e.g. PHP superglobals `$_GET`/`$_POST`). Such names are treated as taint
+    /// roots even without an explicit definition. Default: none.
+    fn is_untrusted_global(&self, _name: &str) -> bool {
+        false
+    }
+
+    /// Taint policy for a sink whose variables could not be extracted: `true`
+    /// (the default) treats it as potentially unsanitized; languages like PHP,
+    /// where sinks are often superglobal-driven, return `false`.
+    fn empty_sink_vars_unsanitized(&self) -> bool {
+        true
+    }
 }
 
 // ---- Configuration languages -------------------------------------------------
@@ -195,6 +209,16 @@ impl Language for Php {
     }
     fn catalog(&self) -> Option<Catalog> {
         Some(crate::languages::php::catalog::load_catalog())
+    }
+    fn is_untrusted_global(&self, name: &str) -> bool {
+        const PHP_SUPERGLOBALS: &[&str] = &[
+            "_GET", "_POST", "_REQUEST", "_COOKIE", "_SERVER", "_ENV", "_FILES", "_SESSION",
+            "GLOBALS",
+        ];
+        PHP_SUPERGLOBALS.contains(&name.trim_start_matches('$'))
+    }
+    fn empty_sink_vars_unsanitized(&self) -> bool {
+        false
     }
 }
 

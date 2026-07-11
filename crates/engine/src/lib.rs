@@ -1130,9 +1130,18 @@ fn extract_sink_variables(text: &str) -> Vec<(String, usize)> {
     vars
 }
 
-const PHP_SUPERGLOBALS: &[&str] = &[
-    "_GET", "_POST", "_REQUEST", "_COOKIE", "_SERVER", "_ENV", "_FILES", "_SESSION", "GLOBALS",
-];
+/// Whether `name` is an implicitly-untrusted global input of the file's
+/// language (e.g. a PHP superglobal). Delegates to the language definition so
+/// the engine stays language-agnostic.
+fn is_untrusted_global(file_type: &str, name: &str) -> bool {
+    parsers::language_for(file_type).is_some_and(|lang| lang.is_untrusted_global(name))
+}
+
+/// Taint policy for a sink with no extractable variables: `true` means treat it
+/// as potentially unsanitized. Delegates to the language definition.
+fn empty_sink_vars_unsanitized(file_type: &str) -> bool {
+    parsers::language_for(file_type).map_or(true, |lang| lang.empty_sink_vars_unsanitized())
+}
 
 fn regex_ranges_with_focus(
     source: &str,
@@ -2475,7 +2484,7 @@ fn eval_rule_impl(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
                                         push_symbol(sym, ms + rel_offset);
                                         added_any = true;
                                     }
-                                    if !added_any && file.file_type.eq_ignore_ascii_case("php") {
+                                    if !added_any {
                                         let line_start = source_text[..ms]
                                             .rfind('\n')
                                             .map(|idx| idx + 1)
@@ -2486,7 +2495,7 @@ fn eval_rule_impl(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
                                             .unwrap_or_else(|| source_text.len());
                                         let line_text = &source_text[line_start..line_end];
                                         for (sym, rel_offset) in extract_sink_variables(line_text) {
-                                            if PHP_SUPERGLOBALS.contains(&sym.as_str()) {
+                                            if is_untrusted_global(&file.file_type, &sym) {
                                                 push_symbol(sym, line_start + rel_offset);
                                             }
                                         }
@@ -2573,7 +2582,7 @@ fn eval_rule_impl(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
                                     push_symbol(sym, ms + rel_offset);
                                     added_any = true;
                                 }
-                                if !added_any && file.file_type.eq_ignore_ascii_case("php") {
+                                if !added_any {
                                     let line_start = source_text[..ms]
                                         .rfind('\n')
                                         .map(|idx| idx + 1)
@@ -2584,7 +2593,7 @@ fn eval_rule_impl(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
                                         .unwrap_or_else(|| source_text.len());
                                     let line_text = &source_text[line_start..line_end];
                                     for (sym, rel_offset) in extract_sink_variables(line_text) {
-                                        if PHP_SUPERGLOBALS.contains(&sym.as_str()) {
+                                        if is_untrusted_global(&file.file_type, &sym) {
                                             push_symbol(sym, line_start + rel_offset);
                                         }
                                     }
@@ -3083,12 +3092,12 @@ fn eval_rule_impl(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
                     .into_iter()
                     .map(|(name, _)| name)
                     .collect();
-                if vars.is_empty() && file.file_type.eq_ignore_ascii_case("php") {
+                if vars.is_empty() {
                     let excerpt_vars = extract_sink_variables(excerpt);
                     let col_idx = column.saturating_sub(1);
                     for (name, offset) in excerpt_vars {
                         if offset == col_idx
-                            && PHP_SUPERGLOBALS.contains(&name.as_str())
+                            && is_untrusted_global(&file.file_type, &name)
                             && col_idx <= excerpt.len()
                             && excerpt[..col_idx].contains(',')
                             && !vars.iter().any(|existing| existing == &name)
@@ -3101,10 +3110,7 @@ fn eval_rule_impl(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
             };
             let sink_vars_unsanitized = |vars: &[String]| {
                 if vars.is_empty() {
-                    if file.file_type.eq_ignore_ascii_case("php") {
-                        return false;
-                    }
-                    return true;
+                    return empty_sink_vars_unsanitized(&file.file_type);
                 }
                 vars.iter()
                     .any(|var| file.symbols.get(var).map(|s| !s.sanitized).unwrap_or(true))
@@ -3160,16 +3166,14 @@ fn eval_rule_impl(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
                     }
 
                     let mut has_path = find_taint_path(file, sym, sink_text).is_some();
-                    if !has_path && file.file_type.eq_ignore_ascii_case("php") {
+                    if !has_path && is_untrusted_global(&file.file_type, sym) {
                         let sym_php = sym.trim_start_matches('$');
-                        if PHP_SUPERGLOBALS.contains(&sym_php) {
-                            if sink_vars.iter().any(|var| var == sym || var == sym_php) {
-                                has_path = true;
-                            } else if !sink_vars.is_empty()
-                                && dfg_reaches_any_var(file, sym_php, &sink_vars)
-                            {
-                                has_path = true;
-                            }
+                        if sink_vars.iter().any(|var| var == sym || var == sym_php) {
+                            has_path = true;
+                        } else if !sink_vars.is_empty()
+                            && dfg_reaches_any_var(file, sym_php, &sink_vars)
+                        {
+                            has_path = true;
                         }
                     }
 
