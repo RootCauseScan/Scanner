@@ -1,7 +1,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::sync::Mutex;
 
 use crate::Finding;
 
@@ -14,10 +14,17 @@ pub struct RuleCacheKey {
     pub content_hash: String,
 }
 
+#[derive(Default)]
+struct Inner {
+    entries: HashMap<RuleCacheKey, RuleCacheValue>,
+    /// Keys in least-recently-used order (front = oldest). Kept consistent with
+    /// `entries`: a key is present here iff it is present in `entries`.
+    order: VecDeque<RuleCacheKey>,
+}
+
 pub struct RuleCache {
-    pub(crate) entries: RwLock<HashMap<RuleCacheKey, RuleCacheValue>>,
-    pub(crate) order: RwLock<VecDeque<RuleCacheKey>>,
-    pub(crate) stats: CacheStats,
+    inner: Mutex<Inner>,
+    stats: CacheStats,
 }
 
 impl Default for RuleCache {
@@ -29,8 +36,7 @@ impl Default for RuleCache {
 impl RuleCache {
     pub fn new() -> Self {
         Self {
-            entries: RwLock::new(HashMap::new()),
-            order: RwLock::new(VecDeque::new()),
+            inner: Mutex::new(Inner::default()),
             stats: CacheStats::default(),
         }
     }
@@ -44,19 +50,40 @@ impl RuleCache {
     where
         F: FnOnce() -> RuleCacheValue,
     {
-        if let Some(value) = self.try_get(&key) {
-            return (value, true);
+        // Fast path: a cache hit. On hit, refresh recency (rare in a full scan,
+        // where every (file, rule, hash) key is unique, so this reorder cost is
+        // not on the hot path).
+        {
+            let mut inner = self.lock();
+            if let Some(value) = inner.entries.get(&key).cloned() {
+                self.stats.record_hit();
+                move_to_back(&mut inner.order, &key);
+                return (value, true);
+            }
         }
 
+        // Miss: compute WITHOUT holding the lock (the closure is the expensive
+        // rule evaluation and must not serialize other threads).
         self.stats.record_miss();
         let value = compute();
-        self.insert(key, value.clone(), capacity);
+
+        let mut inner = self.lock();
+        // A fresh miss key is not in `order`, so append in O(1) — no scan.
+        if inner.entries.insert(key.clone(), value.clone()).is_none() {
+            inner.order.push_back(key);
+        }
+        while inner.order.len() > capacity {
+            if let Some(oldest) = inner.order.pop_front() {
+                inner.entries.remove(&oldest);
+            }
+        }
         (value, false)
     }
 
     pub fn reset(&self) {
-        write_lock(&self.entries).clear();
-        write_lock(&self.order).clear();
+        let mut inner = self.lock();
+        inner.entries.clear();
+        inner.order.clear();
         self.stats.reset();
     }
 
@@ -64,36 +91,16 @@ impl RuleCache {
         self.stats.snapshot()
     }
 
-    fn try_get(&self, key: &RuleCacheKey) -> Option<RuleCacheValue> {
-        let value = read_lock(&self.entries).get(key).cloned();
-        if value.is_some() {
-            self.stats.record_hit();
-            self.mark_used(key.clone());
-        }
-        value
+    fn lock(&self) -> std::sync::MutexGuard<'_, Inner> {
+        self.inner.lock().unwrap_or_else(|e| e.into_inner())
     }
+}
 
-    fn insert(&self, key: RuleCacheKey, value: RuleCacheValue, capacity: usize) {
-        write_lock(&self.entries).insert(key.clone(), value);
-        self.mark_used(key);
-        self.evict_if_needed(capacity);
-    }
-
-    fn mark_used(&self, key: RuleCacheKey) {
-        let mut order = write_lock(&self.order);
-        if let Some(pos) = order.iter().position(|k| k == &key) {
-            order.remove(pos);
-        }
-        order.push_back(key);
-    }
-
-    fn evict_if_needed(&self, capacity: usize) {
-        let mut entries = write_lock(&self.entries);
-        let mut order = write_lock(&self.order);
-        while order.len() > capacity {
-            if let Some(oldest) = order.pop_front() {
-                entries.remove(&oldest);
-            }
+/// Moves `key` to the back (most-recently-used) of `order` if present.
+fn move_to_back(order: &mut VecDeque<RuleCacheKey>, key: &RuleCacheKey) {
+    if let Some(pos) = order.iter().position(|k| k == key) {
+        if let Some(k) = order.remove(pos) {
+            order.push_back(k);
         }
     }
 }
@@ -102,14 +109,6 @@ impl RuleCache {
 pub struct CacheStats {
     hits: AtomicUsize,
     misses: AtomicUsize,
-}
-
-fn read_lock<T>(lock: &RwLock<T>) -> RwLockReadGuard<'_, T> {
-    lock.read().unwrap_or_else(|e| e.into_inner())
-}
-
-fn write_lock<T>(lock: &RwLock<T>) -> RwLockWriteGuard<'_, T> {
-    lock.write().unwrap_or_else(|e| e.into_inner())
 }
 
 impl CacheStats {
