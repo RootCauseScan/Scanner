@@ -96,6 +96,9 @@ impl Language for TypeScript {
         crate::parse_typescript(content, fir);
         Ok(())
     }
+    fn catalog(&self) -> Option<Catalog> {
+        Some(crate::languages::js_catalog::load_catalog())
+    }
 }
 
 pub struct JavaScript;
@@ -106,6 +109,9 @@ impl Language for JavaScript {
     fn parse(&self, content: &str, fir: &mut FileIR) -> anyhow::Result<()> {
         crate::parse_javascript(content, fir);
         Ok(())
+    }
+    fn catalog(&self) -> Option<Catalog> {
+        Some(crate::languages::js_catalog::load_catalog())
     }
 }
 

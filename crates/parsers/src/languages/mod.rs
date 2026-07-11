@@ -45,6 +45,8 @@ pub use go::parse_go;
 pub mod java;
 pub use java::parse_java;
 
+pub mod js_catalog;
+
 pub mod javascript;
 pub use javascript::parse_javascript;
 

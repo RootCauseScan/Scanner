@@ -383,7 +383,11 @@ fn build_dfg(
                         let dfg = fir.dfg.get_or_insert_with(DataFlowGraph::default);
                         dfg.edges.push((def_id, use_id));
                     }
-                    if callee_name.as_deref() == Some("sanitize") {
+                    if callee_name.as_deref() == Some("sanitize")
+                        || callee_name
+                            .as_deref()
+                            .is_some_and(|c| crate::catalog::is_sanitizer("javascript", c))
+                    {
                         mark_sanitized(scopes, &var);
                     }
                 }
