@@ -19,7 +19,9 @@ pub struct ParserMetrics {
 }
 
 pub mod catalog;
+pub mod language;
 pub mod languages;
+pub use language::{language_for, registry, Language};
 pub use languages::*;
 
 /// Builds the data flow graph if it doesn't already exist.
@@ -33,11 +35,9 @@ pub fn build_dfg(fir: &mut FileIR) -> Result<()> {
         .source
         .clone()
         .ok_or_else(|| anyhow!("missing source for {}", fir.file_path))?;
-    match fir.file_type.as_str() {
-        "python" => languages::python::parse_python(&src, fir),
-        "rust" => languages::rust::parse_rust(&src, fir),
-        "java" => languages::java::parse_java(&src, fir),
-        _ => Ok(()),
+    match language_for(&fir.file_type) {
+        Some(lang) => lang.build_dfg(&src, fir),
+        None => Ok(()),
     }
 }
 
@@ -177,39 +177,9 @@ pub fn parse_file(
     });
     let canonical = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     let mut fir = FileIR::new(canonical.to_string_lossy().into_owned(), ftype.to_string());
-    let res: anyhow::Result<()> = match ftype {
-        "dockerfile" => {
-            parse_dockerfile(&content, &mut fir);
-            Ok(())
-        }
-        "yaml" => parse_yaml(&content, &mut fir),
-        "json" => parse_json(&content, &mut fir),
-        "hcl" => {
-            parse_hcl(&content, &mut fir);
-            Ok(())
-        }
-        "typescript" => {
-            parse_typescript(&content, &mut fir);
-            Ok(())
-        }
-        "javascript" => {
-            parse_javascript(&content, &mut fir);
-            Ok(())
-        }
-        "python" => languages::python::parse_python(&content, &mut fir),
-        "go" => {
-            parse_go(&content, &mut fir);
-            Ok(())
-        }
-        "ruby" => {
-            parse_ruby(&content, &mut fir);
-            Ok(())
-        }
-        "rust" => parse_rust(&content, &mut fir),
-        "java" => parse_java(&content, &mut fir),
-        "php" => parse_php(&content, &mut fir),
-        "generic" => parse_generic(&content, &mut fir),
-        _ => Ok(()),
+    let res: anyhow::Result<()> = match language_for(ftype) {
+        Some(lang) => lang.parse(&content, &mut fir),
+        None => Ok(()),
     };
     if let Err(e) = res {
         if let Some(m) = metrics.as_deref_mut() {

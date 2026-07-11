@@ -293,38 +293,9 @@ fn parse_transformed_content(
             .collect::<HashSet<_>>()
     });
     let mut fir = FileIR::new(path.to_string_lossy().into_owned(), language.clone());
-    let res: anyhow::Result<()> = match language.as_str() {
-        "dockerfile" => {
-            parsers::parse_dockerfile(content, &mut fir);
-            Ok(())
-        }
-        "yaml" => parsers::parse_yaml(content, &mut fir),
-        "json" => parsers::parse_json(content, &mut fir),
-        "hcl" => {
-            parsers::parse_hcl(content, &mut fir);
-            Ok(())
-        }
-        "typescript" => {
-            parsers::parse_typescript(content, &mut fir);
-            Ok(())
-        }
-        "javascript" => {
-            parsers::parse_javascript(content, &mut fir);
-            Ok(())
-        }
-        "python" => parsers::languages::python::parse_python(content, &mut fir),
-        "go" => {
-            parsers::parse_go(content, &mut fir);
-            Ok(())
-        }
-        "ruby" => {
-            parsers::parse_ruby(content, &mut fir);
-            Ok(())
-        }
-        "rust" => parsers::parse_rust(content, &mut fir),
-        "java" => parsers::parse_java(content, &mut fir),
-        "php" => parsers::parse_php(content, &mut fir),
-        _ => Ok(()),
+    let res: anyhow::Result<()> = match parsers::language_for(&language) {
+        Some(lang) => lang.parse(content, &mut fir),
+        None => Ok(()),
     };
     if res.is_err() || fir.symbol_types.contains_key("__parse_error__") {
         return None;

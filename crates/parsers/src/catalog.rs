@@ -14,23 +14,12 @@ fn catalogs() -> &'static RwLock<HashMap<String, Catalog>> {
     CATALOGS.get_or_init(|| {
         let mut map = HashMap::new();
 
-        // Load catalogs from language-specific modules
-        map.insert(
-            "python".to_string(),
-            crate::languages::python::catalog::load_catalog(),
-        );
-        map.insert(
-            "rust".to_string(),
-            crate::languages::rust::catalog::load_catalog(),
-        );
-        map.insert(
-            "java".to_string(),
-            crate::languages::java::catalog::load_catalog(),
-        );
-        map.insert(
-            "php".to_string(),
-            crate::languages::php::catalog::load_catalog(),
-        );
+        // Load catalogs from the language registry (single source of truth).
+        for lang in crate::language::registry() {
+            if let Some(catalog) = lang.catalog() {
+                map.insert(lang.id().to_string(), catalog);
+            }
+        }
 
         RwLock::new(map)
     })
