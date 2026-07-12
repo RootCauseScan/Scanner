@@ -75,7 +75,7 @@ pub fn detect_type(path: &Path) -> Option<&'static str> {
 /// Canonical language identifiers understood by the scanner.
 ///
 /// Kept next to [`detect_type`] on purpose: any language added there must be
-/// reflected here so the CLI `--languages` selector and the rule/file filters
+/// reflected here so the CLI `--langs` selector and the rule/file filters
 /// stay in sync.
 pub const SUPPORTED_LANGUAGES: &[&str] = &[
     "dockerfile",

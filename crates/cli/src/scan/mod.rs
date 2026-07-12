@@ -500,7 +500,7 @@ maintainer = "RootCause Security Team <contact@rootcause.dev>"
         args.rules = official_rules_dir;
     }
 
-    // Optional language selection: when `--languages` is given, only files whose
+    // Optional language selection: when `--langs` is given, only files whose
     // detected language is in the set are scanned. `None` means "all languages".
     let selected_languages: Option<HashSet<String>> = if args.languages.is_empty() {
         None

@@ -125,7 +125,7 @@ pub struct ScanArgs {
     /// Common aliases like `js`/`ts`/`py` are accepted. When omitted, every detected
     /// language is scanned. Language-specific rules for the selected languages plus
     /// generic content rules are applied; files of other languages are skipped.
-    #[arg(short = 'l', long = "languages", value_delimiter = ',', value_parser = parse_language)]
+    #[arg(short = 'l', long = "langs", value_delimiter = ',', value_parser = parse_language)]
     pub languages: Vec<String>,
     /// Download official rules automatically when missing
     #[arg(long = "download-rules", hide = true)]
