@@ -202,7 +202,7 @@ class T {
     }
     // symbols table must also not register this.secret
     assert!(
-        fir.symbols.get("this.secret").is_none(),
+        !fir.symbols.contains_key("this.secret"),
         "this.secret should not appear in symbol table for uninitialized field"
     );
 }

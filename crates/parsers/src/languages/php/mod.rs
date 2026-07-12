@@ -784,7 +784,7 @@ pub fn parse_php(content: &str, fir: &mut FileIR) -> Result<()> {
                             // Ensure superglobals on RHS have a Def so we can create edges (e.g. $id = $_GET['id'])
                             for v in &rhs_vars {
                                 if SUPERGLOBALS.contains(&v.as_str())
-                                    && !fir.symbols.get(v).and_then(|s| s.def).is_some()
+                                    && fir.symbols.get(v).and_then(|s| s.def).is_none()
                                 {
                                     let dfg = fir.dfg.get_or_insert_with(DataFlowGraph::default);
                                     let def_id = dfg.nodes.len();

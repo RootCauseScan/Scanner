@@ -37,7 +37,8 @@ pub struct CallComplexity {
     pub cycles: Vec<Vec<String>>,
 }
 
-pub fn analyze_callgraph(files: &[FileIR], direct_only: bool) -> Result<CallGraphAnalysis> {
+// `direct_only` is reserved for direct-only call filtering, not yet implemented.
+pub fn analyze_callgraph(files: &[FileIR], _direct_only: bool) -> Result<CallGraphAnalysis> {
     let mut analysis = CallGraphAnalysis {
         nodes: Vec::new(),
         edges: Vec::new(),
@@ -67,11 +68,7 @@ pub fn analyze_callgraph(files: &[FileIR], direct_only: bool) -> Result<CallGrap
         analysis.nodes.push(CallNode {
             id: func.clone(),
             name: func.clone(),
-            calls: if direct_only {
-                calls.clone()
-            } else {
-                calls.clone()
-            },
+            calls: calls.clone(),
             called_by,
             is_entry,
             is_exit,
@@ -261,7 +258,7 @@ fn callgraph_to_text(analysis: &CallGraphAnalysis) -> String {
 
     output.push_str("=== CALL GRAPH ANALYSIS ===\n\n");
 
-    output.push_str(&format!("📊 COMPLEXITY METRICS:\n"));
+    output.push_str("📊 COMPLEXITY METRICS:\n");
     output.push_str(&format!(
         "  • Total Functions: {}\n",
         analysis.complexity.total_functions

@@ -29,7 +29,7 @@ fn stream_matches_batch() {
         sinks: vec![],
         languages: vec!["k8s".into()],
     });
-    let batch = analyze_files(&[file.clone()], &rules, None);
+    let batch = analyze_files(std::slice::from_ref(&file), &rules, None);
     let stream =
         analyze_files_streaming(vec![file], &rules, &EngineConfig::default(), None, None, None);
     assert_eq!(batch.len(), stream.len());

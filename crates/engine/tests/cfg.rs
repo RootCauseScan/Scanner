@@ -5,7 +5,7 @@ use std::path::PathBuf;
 fn parse_java(rel: &str) -> ir::FileIR {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(rel);
     if !path.exists() {
-        let mut fir = ir::FileIR::new("missing".into(), "java".into());
+        let fir = ir::FileIR::new("missing".into(), "java".into());
         eprintln!("Skipping: fixture not found at {}", path.display());
         return fir;
     }

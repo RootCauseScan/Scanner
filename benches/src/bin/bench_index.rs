@@ -8,8 +8,7 @@ fn run_command(cmd: &str, args: &[&str]) -> std::io::Result<String> {
         .output()
         .map_err(|e| std::io::Error::new(e.kind(), format!("failed to run {cmd}: {e}")))?;
     if !output.status.success() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
+        return Err(std::io::Error::other(
             format!(
                 "{cmd} exited with status {}: {}",
                 output.status,

@@ -98,6 +98,7 @@ fn bench_rule_timeout(c: &mut Criterion) {
         rule_timeout: Some(Duration::from_millis(1)),
         baseline: None,
         suppress_comment: None,
+        ..Default::default()
     };
     c.bench_function("analyze_yaml_timeout", |b| {
         b.iter(|| {

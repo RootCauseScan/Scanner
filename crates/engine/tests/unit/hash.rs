@@ -30,7 +30,7 @@ fn reuses_cache_and_detects_changes() {
 
     let mut metrics1 = EngineMetrics::default();
     let findings1 = analyze_files_cached(
-        &[file1.clone()],
+        std::slice::from_ref(&file1),
         &rules,
         &cache,
         &EngineConfig::default(),
@@ -42,7 +42,7 @@ fn reuses_cache_and_detects_changes() {
 
     let mut metrics2 = EngineMetrics::default();
     let findings2 = analyze_files_cached(
-        &[file1.clone()],
+        std::slice::from_ref(&file1),
         &rules,
         &cache,
         &EngineConfig::default(),
@@ -90,7 +90,7 @@ fn analyzes_without_cache() {
     let file = mk_file_ir(vec![("k8s", "a", json!("foo"))]);
 
     let findings = analyze_files_with_config(
-        &[file.clone()],
+        std::slice::from_ref(&file),
         &rules,
         &EngineConfig::default(),
         None,

@@ -1,6 +1,6 @@
 use self::canonical::TEST_MUTEX;
-pub use engine::*;
-pub use ir::FileIR;
+use engine::*;
+use ir::FileIR;
 use loader::Severity;
 use regex::Regex;
 use serde_json::json;

@@ -12,7 +12,7 @@ use serde_yaml::{self, Value as YamlValue};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::OnceLock;
-use tracing::{debug, warn};
+use tracing::debug;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 /// Subset of rules compatible con Semgrep.
@@ -87,7 +87,7 @@ fn extract_fn_name_from_pattern(pat: &str) -> Option<String> {
         return None;
     }
     let name = before
-        .rsplit(|c| c == '.' || c == ':')
+        .rsplit(['.', ':'])
         .next()
         .unwrap_or(before)
         .trim();
@@ -961,11 +961,11 @@ fn compile_sub_matchers(
     for sub in &mut subs {
         // Parent inside/not_inside prepended so the narrower child guard is checked last.
         let mut new_inside = local_inside.clone();
-        new_inside.extend(sub.inside.drain(..));
+        new_inside.append(&mut sub.inside);
         sub.inside = new_inside;
 
         let mut new_not_inside = local_not_inside.clone();
-        new_not_inside.extend(sub.not_inside.drain(..));
+        new_not_inside.append(&mut sub.not_inside);
         sub.not_inside = new_not_inside;
 
         // Merge deny: OR-combine parent and child denies.
@@ -1331,10 +1331,10 @@ pub(crate) fn compile_semgrep_rule(
         if !global_inside.is_empty() || !global_not_inside.is_empty() {
             for sub in &mut subs {
                 let mut new_inside = global_inside.clone();
-                new_inside.extend(sub.inside.drain(..));
+                new_inside.append(&mut sub.inside);
                 sub.inside = new_inside;
                 let mut new_not_inside = global_not_inside.clone();
-                new_not_inside.extend(sub.not_inside.drain(..));
+                new_not_inside.append(&mut sub.not_inside);
                 sub.not_inside = new_not_inside;
             }
         }

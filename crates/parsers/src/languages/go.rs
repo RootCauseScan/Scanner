@@ -173,10 +173,7 @@ pub fn parse_go(content: &str, fir: &mut FileIR) {
             }
         }
 
-        match node.kind() {
-            "block" => scopes.push(HashMap::new()),
-            _ => {}
-        }
+        if node.kind() == "block" { scopes.push(HashMap::new()) }
 
         match node.kind() {
             // := short variable declaration: x, y := expr1, expr2
@@ -385,10 +382,7 @@ pub fn parse_go(content: &str, fir: &mut FileIR) {
                     }
                 }
             }
-            match node.kind() {
-                "block" => { let _ = scopes.pop(); }
-                _ => {}
-            }
+            if node.kind() == "block" { let _ = scopes.pop(); }
             return;
         }
 
@@ -397,10 +391,7 @@ pub fn parse_go(content: &str, fir: &mut FileIR) {
             build_dfg_go(child, src, fir, scopes, fn_ids, child_fn_id);
         }
 
-        match node.kind() {
-            "block" => { let _ = scopes.pop(); }
-            _ => {}
-        }
+        if node.kind() == "block" { let _ = scopes.pop(); }
     }
 
     let mut parser = tree_sitter::Parser::new();

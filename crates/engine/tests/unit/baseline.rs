@@ -32,7 +32,7 @@ fn write_and_load_preserve_metadata() -> anyhow::Result<()> {
     };
     let orig_dir = std::env::current_dir()?;
     std::env::set_current_dir(&dir)?;
-    write_baseline(&baseline_path, &[finding.clone()])?;
+    write_baseline(&baseline_path, std::slice::from_ref(&finding))?;
     let set = load_baseline(&baseline_path)?;
     let data = std::fs::read_to_string(&baseline_path)?;
     let entries: Vec<BaselineEntry> = serde_json::from_str(&data)?;
@@ -95,7 +95,7 @@ fn baseline_filters_by_file_and_line() {
         sinks: vec![],
         languages: vec!["k8s".into()],
     });
-    let findings = analyze_files(&[file.clone()], &rules, None);
+    let findings = analyze_files(std::slice::from_ref(&file), &rules, None);
     assert_eq!(findings.len(), 1);
     let entry = BaselineEntry::from(&findings[0]);
     let mut set = HashSet::new();
@@ -107,7 +107,7 @@ fn baseline_filters_by_file_and_line() {
         suppress_comment: None,
         analysis_errors: None,
     };
-    let res = analyze_files_with_config(&[file.clone()], &rules, &cfg, None, None, None);
+    let res = analyze_files_with_config(std::slice::from_ref(&file), &rules, &cfg, None, None, None);
     assert!(res.is_empty());
     let mut entry2 = entry.clone();
     entry2.line += 1;

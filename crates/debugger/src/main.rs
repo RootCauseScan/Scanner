@@ -139,7 +139,7 @@ fn run_ir(
         Kind::Ssa => inspection.format_dfg(format)?,
         Kind::Callgraph => {
             let fir = inspection.borrow();
-            let analysis = callgraph::analyze_callgraph(&[fir.clone()], false)?;
+            let analysis = callgraph::analyze_callgraph(std::slice::from_ref(&fir), false)?;
             callgraph::format_callgraph_analysis(&analysis, format)
         }
     };

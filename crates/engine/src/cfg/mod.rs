@@ -57,12 +57,12 @@ pub fn has_unsanitized_route(file: &FileIR) -> bool {
     match file.file_type.as_str() {
         "typescript" | "javascript" => ast.nodes.iter().any(|n| has_unsanitized_js_like(n, src)),
         "python" => ast.nodes.iter().any(|n| has_unsanitized_python(n, src)),
-        "java" => ast.nodes.iter().any(|n| has_unsanitized_java(n, src)),
+        "java" => ast.nodes.iter().any(has_unsanitized_java),
         _ => false,
     }
 }
 
-fn has_unsanitized_java(node: &AstNode, src: &str) -> bool {
+fn has_unsanitized_java(node: &AstNode) -> bool {
     // Detect response.getWriter().print/println(tainted) where tainted comes from request
     if node.kind == "MethodInvocation" {
         if let Some(val) = node.value.as_str() {
@@ -85,7 +85,7 @@ fn has_unsanitized_java(node: &AstNode, src: &str) -> bool {
             }
         }
     }
-    node.children.iter().any(|c| has_unsanitized_java(c, src))
+    node.children.iter().any(has_unsanitized_java)
 }
 
 fn has_unsanitized_js_like(node: &AstNode, src: &str) -> bool {

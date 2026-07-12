@@ -83,12 +83,16 @@ pub fn prepare_file(file: &mut ir::FileIR) {
 // Collects per-file source/sink data during parallel analysis; a sequential
 // second pass then connects them through the CallGraph.
 
+/// `(enclosing_func_name, file_path, sink_text, line, col, excerpt)` recorded
+/// for an inter-file sink.
+type SinkFuncEntry = (String, String, String, usize, usize, String);
+
 #[derive(Default)]
 struct InterFileTaintState {
     /// rule_id → [(enclosing_func_name, file_path)]
     source_funcs: HashMap<String, Vec<(String, String)>>,
     /// rule_id → [(enclosing_func_name, file_path, sink_text, line, col, excerpt)]
-    sink_funcs: HashMap<String, Vec<(String, String, String, usize, usize, String)>>,
+    sink_funcs: HashMap<String, Vec<SinkFuncEntry>>,
 }
 
 static INTER_FILE_TAINT: OnceLock<Mutex<InterFileTaintState>> = OnceLock::new();
@@ -134,7 +138,7 @@ fn collect_func_for_line(
                     None => name.to_string(),
                 };
                 let start = node.meta.line;
-                if best.as_ref().map_or(true, |(l, _)| start >= *l) {
+                if best.as_ref().is_none_or(|(l, _)| start >= *l) {
                     *best = Some((start, qualified));
                 }
             }
@@ -335,7 +339,7 @@ pub fn find_taint_path(fir: &FileIR, source: &str, sink: &str) -> Option<Vec<usi
     // Fall back to all zero-indegree unsanitized Def nodes when the source name
     // is empty or not found in the DFG (preserves existing behaviour for callers
     // that pass an empty source string).
-    let seeded_from_source = dfg.nodes.iter().enumerate().any(|(_, n)| {
+    let seeded_from_source = dfg.nodes.iter().any(|n| {
         (n.name == source || n.name == source_key)
             && matches!(n.kind, ir::DFNodeKind::Def | ir::DFNodeKind::Param)
     });
@@ -820,7 +824,7 @@ fn is_untrusted_global(file_type: &str, name: &str) -> bool {
 /// Taint policy for a sink with no extractable variables: `true` means treat it
 /// as potentially unsanitized. Delegates to the language definition.
 fn empty_sink_vars_unsanitized(file_type: &str) -> bool {
-    parsers::language_for(file_type).map_or(true, |lang| lang.empty_sink_vars_unsanitized())
+    parsers::language_for(file_type).is_none_or(|lang| lang.empty_sink_vars_unsanitized())
 }
 
 /// Collects alias mappings from parser symbol data. Only entries with canonical paths
@@ -2752,10 +2756,8 @@ fn eval_rule_impl(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
                     let mut has_path = find_taint_path(file, sym, sink_text).is_some();
                     if !has_path && is_untrusted_global(&file.file_type, sym) {
                         let sym_php = sym.trim_start_matches('$');
-                        if sink_vars.iter().any(|var| var == sym || var == sym_php) {
-                            has_path = true;
-                        } else if !sink_vars.is_empty()
-                            && dfg_reaches_any_var(file, sym_php, &sink_vars)
+                        if sink_vars.iter().any(|var| var == sym || var == sym_php)
+                            || (!sink_vars.is_empty() && dfg_reaches_any_var(file, sym_php, &sink_vars))
                         {
                             has_path = true;
                         }

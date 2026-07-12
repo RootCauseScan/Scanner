@@ -26,6 +26,12 @@ impl<'a> Drop for DebugScope<'a> {
     }
 }
 
+impl Default for DebugToolkit {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DebugToolkit {
     pub fn new() -> Self {
         Self {

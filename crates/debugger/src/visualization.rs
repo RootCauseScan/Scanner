@@ -97,20 +97,20 @@ pub fn ast_to_tree(ast: &FileAst) -> String {
     let mut out = String::new();
     for node in &ast.nodes {
         if node.parent.is_none() {
-            out.push_str(&format_tree_node(node, 0, ast));
+            out.push_str(&format_tree_node(node, 0));
         }
     }
     out
 }
 
-fn format_tree_node(node: &AstNode, depth: usize, ast: &FileAst) -> String {
+fn format_tree_node(node: &AstNode, depth: usize) -> String {
     let mut out = String::new();
     let indent = "  ".repeat(depth);
     let label = format_node_label(node);
     out.push_str(&format!("{}{}\n", indent, label));
 
     for child in &node.children {
-        out.push_str(&format_tree_node(child, depth + 1, ast));
+        out.push_str(&format_tree_node(child, depth + 1));
     }
 
     out

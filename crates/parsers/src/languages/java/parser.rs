@@ -246,7 +246,7 @@ pub fn parse_java_project(
 /// `parse_java` calls. Identifies each file's package via its stored source,
 /// builds a package-name→FileIR map, calls `link_imports`, and writes the
 /// linked IRs back into the original slice.
-pub fn link_java_files(files: &mut Vec<FileIR>) {
+pub fn link_java_files(files: &mut [FileIR]) {
     let java_indices: Vec<usize> = files
         .iter()
         .enumerate()
