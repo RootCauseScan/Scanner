@@ -1,0 +1,16 @@
+name: Build and push Docker image
+on:
+  push:
+    branches: [ main ]
+env:
+  IMAGE: ${{ github.repository }}
+  TAG: ${GITHUB_SHA}
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Log in
+        run: echo "${{ secrets.REGISTRY_TOKEN }}" | docker login -u "${USER}" --password-stdin
+      - name: Build
+        run: docker build -t "${IMAGE}:${TAG}" .
