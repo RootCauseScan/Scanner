@@ -1,0 +1,50 @@
+rules:
+  - id: java-ssrf-resttemplate
+    languages:
+      - java
+    severity: ERROR
+    message: >-
+      User data flows into the URL of an outbound RestTemplate call. An attacker
+      could point this request at their own server (exfiltrating cookies or
+      authorization headers) or probe internal services the server can reach.
+      This is server-side request forgery (SSRF). Validate the target host
+      against an allowlist instead of using user-supplied URLs directly.
+    metadata:
+      cwe:
+        - "CWE-918: Server-Side Request Forgery (SSRF)"
+      owasp:
+        - A10:2021 - Server-Side Request Forgery (SSRF)
+      category: security
+      technology:
+        - java
+        - spring
+      confidence: MEDIUM
+    options:
+      interfile: true
+    mode: taint
+    pattern-sources:
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  $METHODNAME(..., @$REQ(...) $TYPE $SOURCE,...) {
+                    ...
+                  }
+              - pattern-inside: |
+                  $METHODNAME(..., @$REQ $TYPE $SOURCE,...) {
+                    ...
+                  }
+          - metavariable-regex:
+              metavariable: $REQ
+              regex: (RequestBody|PathVariable|RequestParam|RequestHeader|CookieValue|ModelAttribute)
+          - metavariable-regex:
+              metavariable: $TYPE
+              regex: ^(?!(Integer|Long|Float|Double|Char|Boolean|int|long|float|double|char|boolean))
+          - focus-metavariable: $SOURCE
+    pattern-sinks:
+      - pattern-either:
+          - pattern: $REST.exchange($URL, ...)
+          - pattern: $REST.getForObject($URL, ...)
+          - pattern: $REST.getForEntity($URL, ...)
+          - pattern: $REST.postForObject($URL, ...)
+          - pattern: $REST.postForEntity($URL, ...)
+          - pattern: new URL($URL)

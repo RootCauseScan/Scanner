@@ -163,17 +163,57 @@ fn record_interfile_sources(rule: &CompiledRule, file: &FileIR, source_syms: &[(
     }
 }
 
+/// Splits a code fragment into its identifier tokens (`[A-Za-z0-9_]+`).
+fn ident_tokens(s: &str) -> HashSet<String> {
+    let mut out = HashSet::new();
+    let mut cur = String::new();
+    for c in s.chars() {
+        if c.is_alphanumeric() || c == '_' {
+            cur.push(c);
+        } else if !cur.is_empty() {
+            out.insert(std::mem::take(&mut cur));
+        }
+    }
+    if !cur.is_empty() {
+        out.insert(cur);
+    }
+    out
+}
+
 fn record_interfile_sinks(
     rule: &CompiledRule,
     file: &FileIR,
     sink_hits: &[(String, usize, usize, String)],
 ) {
+    // Cross-file taint enters a callee exclusively through its formal
+    // parameters, so an inter-file sink is only reachable from a caller's
+    // tainted argument if the sink expression actually references one of the
+    // callee's parameters. Requiring that reference keeps the connection
+    // precise: it preserves flows like `rest.exchange(request.url, ...)` (uses
+    // the `request` param) while rejecting incidental sink-shaped calls that
+    // only touch locals, e.g. `sb.append(line)` inside a file-reading helper.
+    // The check only applies to the inter-file second pass; single-file taint
+    // is unaffected. Skipped when the DFG is unavailable to avoid over-filtering.
+    let param_names: Option<HashSet<String>> = file.dfg.as_ref().map(|d| {
+        d.nodes
+            .iter()
+            .filter(|n| matches!(n.kind, ir::DFNodeKind::Param))
+            .map(|n| n.name.clone())
+            .collect()
+    });
+
     let mut state = match inter_file_state().lock() {
         Ok(s) => s,
         Err(e) => e.into_inner(),
     };
     let entry = state.sink_funcs.entry(rule.id.clone()).or_default();
     for (sink_text, line, col, excerpt) in sink_hits {
+        if let Some(params) = &param_names {
+            let refs = ident_tokens(excerpt);
+            if !params.iter().any(|p| refs.contains(p)) {
+                continue;
+            }
+        }
         if let Some(func) = enclosing_function_name(file, *line) {
             entry.push((
                 func,

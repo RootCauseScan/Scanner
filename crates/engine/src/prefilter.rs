@@ -172,8 +172,18 @@ pub(crate) fn rule_prefilter(rule: &CompiledRule) -> Option<Vec<Vec<String>>> {
             }
         }
         MatcherKind::TaintRule { .. } => {
-            // A taint finding needs at least one sink to match, so its name must
-            // appear. Each sink name is its own single-literal clause.
+            // Inter-file taint can place the source in one file and the sink in
+            // another. A sink-only prefilter would skip the source-only file,
+            // so its source is never recorded and the cross-file pass can never
+            // connect them. Interfile-opted rules therefore opt out of the
+            // literal prefilter (source annotations rarely yield a sound literal
+            // to OR in). Interfile analysis is opt-in and rare, so the cost of
+            // running these few rules on every file is acceptable.
+            if rule.interfile {
+                return None;
+            }
+            // A single-file taint finding needs at least one sink to match, so
+            // its name must appear. Each sink name is its own single-literal clause.
             for sink in &rule.sinks {
                 if sink.is_empty() {
                     return None;
