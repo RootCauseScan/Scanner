@@ -1,0 +1,12 @@
+rules:
+  - id: java-servlet-sqli-taint
+    languages: [java]
+    severity: ERROR
+    message: User input flows into Statement.executeQuery (SQL injection).
+    mode: taint
+    pattern-sources:
+      - pattern: $REQ.getParameter(...)
+    pattern-sinks:
+      - pattern-either:
+          - pattern: $STMT.executeQuery($SQL)
+          - pattern: $STMT.execute($SQL)

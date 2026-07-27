@@ -18,7 +18,17 @@ pub(crate) fn regex_ranges_any(source: &str, regs: &[AnyRegex]) -> Vec<(usize, u
     let mut ranges = Vec::new();
     for re in regs {
         if re.is_fancy() {
-            // Use the same protection for fancy regex as in other places
+            // Context patterns (pattern-inside / not-inside) frequently span
+            // lines — e.g. a trailing Semgrep `...` compiled to `(?s).*$`.
+            // Scanning line-by-line would truncate those ranges and reject
+            // valid allows on later lines. Try a full-source scan first.
+            let full: Vec<(usize, usize)> = re.find_iter(source).collect();
+            if !full.is_empty() {
+                ranges.extend(full);
+                continue;
+            }
+            // Fall back to line-by-line when the full scan finds nothing, to
+            // bound catastrophic backtracking on pathological patterns.
             let start_guard = Instant::now();
             let mut offset = 0usize;
             for seg in source.split_inclusive('\n') {
@@ -28,19 +38,15 @@ pub(crate) fn regex_ranges_any(source: &str, regs: &[AnyRegex]) -> Vec<(usize, u
                 }
                 let mut match_count = 0;
                 for (ls, le) in re.find_iter(seg) {
-                    // Prevent infinite loops in fancy regex by limiting matches per segment
                     match_count += 1;
                     if match_count > 1000 {
                         debug!("regex_ranges_any: Aborting fancy regex scan due to too many matches in segment");
                         break;
                     }
-
-                    // Check timeout more frequently within the iterator
                     if start_guard.elapsed() > FANCY_REGEX_GUARD {
                         debug!("regex_ranges_any: Aborting fancy regex scan due to guard timeout in iterator");
                         break;
                     }
-
                     let s = offset + ls;
                     let e = offset + le;
                     ranges.push((s, e));

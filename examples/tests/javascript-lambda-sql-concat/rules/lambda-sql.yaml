@@ -1,0 +1,23 @@
+rules:
+  - id: js-lambda-sql-concat
+    languages: [javascript]
+    severity: ERROR
+    message: >-
+      Manual SQL string construction with Lambda event input. Use parameterized queries.
+    patterns:
+      - pattern-either:
+          - pattern-inside: |
+              exports.handler = function ($EVENT, ...) {
+                ...
+              }
+          - pattern-inside: |
+              exports.handler = ($EVENT, ...) => {
+                ...
+              }
+      - pattern-either:
+          - pattern: '"$SQLSTR" + ...'
+          - pattern: |
+              `$SQLSTR${...}...`
+      - metavariable-regex:
+          metavariable: $SQLSTR
+          regex: (?i).*\b(select|delete|insert|create|update|alter|drop)\b.*

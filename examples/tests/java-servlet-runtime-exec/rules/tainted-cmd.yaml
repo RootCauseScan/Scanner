@@ -1,0 +1,13 @@
+rules:
+  - id: java-servlet-runtime-exec
+    languages: [java]
+    severity: ERROR
+    message: >-
+      HTTP request parameter flows into Runtime.exec. This is command injection.
+    mode: taint
+    pattern-sources:
+      - pattern: $REQ.getParameter(...)
+    pattern-sinks:
+      - pattern-either:
+          - pattern: Runtime.getRuntime().exec($CMD)
+          - pattern: $RT.exec($CMD)

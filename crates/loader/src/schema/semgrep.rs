@@ -241,7 +241,8 @@ pub fn relax_semgrep_ellipsis(segment: String) -> String {
     result = result.replace("(?:.*?,\\s+\\)?}", "(?:.*?,\\s+)?}");
     result = result.replace("(?:.*?,\\s+\\)?(", "(?:.*?,\\s+)?(");
     result = result.replace("(?:.*?,\\s+\\)?)", "(?:.*?,\\s+)?)");
-    result = result.replace("(?:,\\s+.*?)?\\)", "(?:,\\s+.*?)?");
+    // Keep the closing `)` after optional `, ...` so patterns like
+    // `function ($EVENT, ...) {` still require the parameter-list `)`.
 
     if result.contains("dict\\(") && !result.contains("dict\\(.*\\)") {
         if let Some(pos) = result.rfind("dict\\(") {
@@ -332,7 +333,21 @@ fn count_metavar_occurrences(pattern: &str) -> HashMap<String, usize> {
     counts
 }
 
+fn strip_typed_metavars(pattern: &str) -> String {
+    // Semgrep typed metavariables: `(java.lang.Runtime $R)` / `(HttpServletRequest $REQ)`.
+    // Without a type system we keep the metavariable so `$R.exec(...)` still matches
+    // `Runtime.getRuntime().exec(...)` via the metavariable wildcard.
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| {
+        Regex::new(r"\([A-Za-z_][\w.]*(?:<[^<>]*>)?\s+(\$[A-Za-z_][A-Za-z0-9_]*)\)")
+            .expect("typed metavar regex")
+    });
+    re.replace_all(pattern, "$1").into_owned()
+}
+
 fn build_semgrep_regex(pattern: &str, mv: &HashMap<String, String>) -> String {
+    let pattern = strip_typed_metavars(pattern);
+    let pattern = pattern.as_str();
     let metav = Regex::new(r"\$[A-Za-z_][A-Za-z0-9_]*").expect("valid metavariable regex");
     let mut segments: Vec<PatternSegment> = Vec::new();
     let mut last = 0;
@@ -392,6 +407,12 @@ fn build_semgrep_regex(pattern: &str, mv: &HashMap<String, String>) -> String {
     for segment in segments {
         p.push_str(&segment.content);
     }
+    // `foo (` in Semgrep also matches `foo(` — only relax spaces before `(`/`{`.
+    p = p
+        .replace(r"\s+(", r"\s*(")
+        .replace(r"\s+\(", r"\s*\(")
+        .replace(r"\s+{", r"\s*{")
+        .replace(r"\s+\{", r"\s*\{");
     relax_semgrep_ellipsis(p)
 }
 
@@ -837,12 +858,43 @@ fn normalize_pattern_text(s: &str) -> String {
 }
 
 fn compile_inside_re(s: &str, mv: &HashMap<String, String>) -> anyhow::Result<Option<AnyRegex>> {
-    let combined = normalize_pattern_text(s);
+    compile_context_re(s, mv, true)
+}
+
+fn compile_not_inside_re(s: &str, mv: &HashMap<String, String>) -> anyhow::Result<Option<AnyRegex>> {
+    // Do not extend not-inside to EOF on trailing `...`: that would swallow
+    // later sinks that merely follow a harmless assignment in the same method.
+    compile_context_re(s, mv, false)
+}
+
+fn compile_context_re(
+    s: &str,
+    mv: &HashMap<String, String>,
+    extend_trailing_ellipsis: bool,
+) -> anyhow::Result<Option<AnyRegex>> {
+    // Split out a trailing Semgrep ellipsis (`...` on its own line). For
+    // pattern-inside, that means "and anything after", so the range must reach
+    // EOF; a bare non-greedy `.*?` would shrink to a single line.
+    let mut lines: Vec<&str> = s
+        .lines()
+        .map(|l| l.trim())
+        .filter(|l| !l.is_empty())
+        .collect();
+    let trailing_ellipsis = lines.last().is_some_and(|l| *l == "...");
+    if trailing_ellipsis {
+        lines.pop();
+    }
+    let combined = lines.join("\n");
     if combined.is_empty() {
         return Ok(None);
     }
     let mut re = semgrep_to_regex_exact(&combined, mv);
-    re = re.replacen("(?s)", "(?ms)^", 1);
+    // Anchor at a line start but allow indentation — Semgrep patterns are
+    // indentation-insensitive and most real code indents declarations.
+    re = re.replacen("(?s)", "(?ms)^[ \\t]*", 1);
+    if extend_trailing_ellipsis && trailing_ellipsis {
+        re.push_str("(?s).*$");
+    }
     Ok(Some(FancyRegex::new(&re)?.into()))
 }
 
@@ -896,7 +948,7 @@ fn compile_sub_matchers(
         }
         if let Some(v) = item.get("pattern-not-inside") {
             if let Some(s) = v.as_str() {
-                if let Some(re) = compile_inside_re(s, mv)? {
+                if let Some(re) = compile_not_inside_re(s, mv)? {
                     local_not_inside.push(re);
                 }
             }
@@ -928,7 +980,7 @@ fn compile_sub_matchers(
                     subs.push(SubMatcher {
                         allow: vec![allow_item],
                         deny: None,
-                        inside: Vec::new(),
+                        inside_groups: Vec::new(),
                         not_inside: Vec::new(),
                     });
                 }
@@ -939,14 +991,40 @@ fn compile_sub_matchers(
                 subs.push(SubMatcher {
                     allow: vec![(re, s.to_string())],
                     deny: None,
-                    inside: Vec::new(),
+                    inside_groups: Vec::new(),
                     not_inside: Vec::new(),
                 });
             }
         } else if let Some(v) = item.get("pattern-either") {
             if let Some(seq) = v.as_sequence() {
-                for alt in seq {
-                    subs.extend(compile_node_sub_matchers(alt, mv)?);
+                // Semgrep: `pattern-either` of only `pattern-inside` nodes means
+                // "must be inside A OR inside B". Attach those as OR-ed local
+                // inside guards for sibling allows in this `patterns:` block.
+                // Without this, insides are dropped and `$SESSION(...)` matches
+                // any call (e.g. `eval(...)`).
+                let mut either_insides: Vec<AnyRegex> = Vec::new();
+                let mut all_inside_only = !seq.is_empty();
+                if all_inside_only {
+                    for alt in seq {
+                        match alt.get("pattern-inside").and_then(|x| x.as_str()) {
+                            Some(s) => {
+                                if let Some(re) = compile_inside_re(s, mv)? {
+                                    either_insides.push(re);
+                                }
+                            }
+                            None => {
+                                all_inside_only = false;
+                                break;
+                            }
+                        }
+                    }
+                }
+                if all_inside_only && !either_insides.is_empty() {
+                    local_inside.extend(either_insides);
+                } else {
+                    for alt in seq {
+                        subs.extend(compile_node_sub_matchers(alt, mv)?);
+                    }
                 }
             }
         } else if let Some(v) = item.get("patterns") {
@@ -959,10 +1037,11 @@ fn compile_sub_matchers(
 
     // Apply local context to every collected alternative.
     for sub in &mut subs {
-        // Parent inside/not_inside prepended so the narrower child guard is checked last.
-        let mut new_inside = local_inside.clone();
-        new_inside.append(&mut sub.inside);
-        sub.inside = new_inside;
+        // Parent OR-group is AND-ed with any child inside groups (Semgrep
+        // nesting), not flattened into a single OR list.
+        if !local_inside.is_empty() {
+            sub.inside_groups.insert(0, local_inside.clone());
+        }
 
         let mut new_not_inside = local_not_inside.clone();
         new_not_inside.append(&mut sub.not_inside);
@@ -1009,7 +1088,7 @@ fn compile_node_sub_matchers(
                                 return Ok(vec![SubMatcher {
                                     allow: vec![item],
                                     deny: None,
-                                    inside: Vec::new(),
+                                    inside_groups: Vec::new(),
                                     not_inside: Vec::new(),
                                 }]);
                             }
@@ -1296,7 +1375,7 @@ pub(crate) fn compile_semgrep_rule(
                 subs.push(SubMatcher {
                     allow: vec![item],
                     deny: None,
-                    inside: Vec::new(),
+                    inside_groups: Vec::new(),
                     not_inside: Vec::new(),
                 });
             }
@@ -1322,7 +1401,7 @@ pub(crate) fn compile_semgrep_rule(
         if let Some(not_inside_nodes) = &sr.pattern_not_inside {
             for node in not_inside_nodes {
                 if let Some(s) = yaml_node_as_pattern_str(node) {
-                    if let Some(re) = compile_inside_re(s, &mv)? {
+                    if let Some(re) = compile_not_inside_re(s, &mv)? {
                         global_not_inside.push(re);
                     }
                 }
@@ -1330,9 +1409,9 @@ pub(crate) fn compile_semgrep_rule(
         }
         if !global_inside.is_empty() || !global_not_inside.is_empty() {
             for sub in &mut subs {
-                let mut new_inside = global_inside.clone();
-                new_inside.append(&mut sub.inside);
-                sub.inside = new_inside;
+                if !global_inside.is_empty() {
+                    sub.inside_groups.insert(0, global_inside.clone());
+                }
                 let mut new_not_inside = global_not_inside.clone();
                 new_not_inside.append(&mut sub.not_inside);
                 sub.not_inside = new_not_inside;

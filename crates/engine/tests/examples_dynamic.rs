@@ -102,9 +102,24 @@ fn dynamic_examples_should_match_expectations() {
                 }
             }
         }
+        // Suites that opt into strict regression (file `STRICT` present) must
+        // match every BAD fixture. Others keep the soft warning so older
+        // incomplete suites do not block CI.
+        let strict = suite_dir.join("STRICT").is_file();
         if matched_bad_files == 0 {
+            if strict {
+                panic!(
+                    "no BAD fixtures matched in suite {:?}; unmatched files: {:?}",
+                    suite_dir, files_without_findings
+                );
+            }
             eprintln!(
                 "warning: no BAD fixtures matched in suite {:?}; unmatched files: {:?}",
+                suite_dir, files_without_findings
+            );
+        } else if strict && !files_without_findings.is_empty() {
+            panic!(
+                "BAD fixtures without findings in suite {:?}: {:?}",
                 suite_dir, files_without_findings
             );
         }

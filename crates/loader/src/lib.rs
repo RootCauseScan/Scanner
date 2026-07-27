@@ -197,7 +197,7 @@ mod tests {
         match &rs.rules[0].matcher {
             MatcherKind::TextRegexMulti { subs } => {
                 assert_eq!(subs.len(), 1);
-                assert_eq!(subs[0].inside.len(), 1);
+                assert_eq!(subs[0].inside_groups.iter().flatten().count(), 1);
                 assert_eq!(subs[0].not_inside.len(), 1);
             }
             _ => panic!("expected TextRegexMulti"),
@@ -252,7 +252,46 @@ mod tests {
                 // One sub-matcher: allow=foo(...) scoped to inside=bar(...)
                 assert_eq!(subs.len(), 1);
                 assert_eq!(subs[0].allow.len(), 1);
-                assert_eq!(subs[0].inside.len(), 1);
+                assert_eq!(subs[0].inside_groups.iter().flatten().count(), 1);
+            }
+            _ => panic!("expected TextRegexMulti"),
+        }
+    }
+
+    #[test]
+    fn pattern_either_of_pattern_inside_becomes_inside_guards() {
+        // Regression: express-cookie-session / notevil style rules put
+        // `pattern-either: [pattern-inside: A, pattern-inside: B]` as a sibling
+        // of `pattern: $X(...)`. Those insides must not be dropped, or else
+        // `$X(...)` matches any call (e.g. eval(...)).
+        let dir = tempdir().unwrap();
+        let rule_yaml = r#"rules:
+- id: either.inside
+  message: session without secure
+  severity: WARNING
+  languages: [javascript]
+  patterns:
+    - pattern-either:
+        - pattern-inside: |
+            $SESSION = require('cookie-session');
+            ...
+        - pattern-inside: |
+            $SESSION = require('express-session');
+            ...
+    - pattern: $SESSION(...)
+"#;
+        fs::write(dir.path().join("either-inside.yml"), rule_yaml).unwrap();
+        let rs = load_rules(dir.path()).unwrap();
+        assert_eq!(rs.rules.len(), 1);
+        match &rs.rules[0].matcher {
+            MatcherKind::TextRegexMulti { subs } => {
+                assert_eq!(subs.len(), 1);
+                assert_eq!(subs[0].allow.len(), 1);
+                let n = subs[0].inside_groups.iter().flatten().count();
+                assert!(
+                    n >= 2,
+                    "expected OR-ed pattern-inside guards, got inside={n:?}"
+                );
             }
             _ => panic!("expected TextRegexMulti"),
         }
@@ -310,6 +349,21 @@ mod tests {
         fs::write(dir.path().join("bad.yml"), bad).unwrap();
         let err = load_rules(dir.path()).unwrap_err();
         assert!(err.downcast_ref::<serde_yaml::Error>().is_some());
+    }
+
+    #[test]
+    fn typed_metavar_stripped_in_pattern() {
+        let mv = HashMap::new();
+        let re_str = semgrep_to_regex("(java.lang.Runtime $R).exec($CMD)", &mv);
+        let re = fancy_regex::Regex::new(&re_str).expect("valid regex");
+        assert!(
+            re.is_match("Runtime.getRuntime().exec(cmd)").unwrap()
+                || re.is_match("runtime.exec(cmd)").unwrap()
+                || re.is_match("x.exec(y)").unwrap(),
+            "typed metavar should reduce to metavariable wildcard, re={re_str}"
+        );
+        // Must not require the literal type tokens
+        assert!(!re_str.contains("java"), "type prefix should be stripped: {re_str}");
     }
 
     #[test]
@@ -524,3 +578,11 @@ focus-metavariable: $VAR
             .is_match("a = 'value' and b =\"foo\""));
     }
 }
+
+
+
+
+
+
+
+

@@ -769,8 +769,48 @@ impl From<&Finding> for BaselineEntry {
 }
 
 fn dedup_findings(findings: &mut Vec<Finding>) {
+    // Same rule + file + line counts as one finding (column-only duplicates
+    // come from overlapping sink/allow alternatives for the same issue).
     let mut seen = HashSet::new();
-    findings.retain(|f| seen.insert(f.id.clone()));
+    findings.retain(|f| {
+        let key = format!(
+            "{}:{}:{}",
+            f.rule_id,
+            canonicalize_path(&f.file).to_string_lossy(),
+            f.line
+        );
+        seen.insert(key)
+    });
+}
+
+/// AND of OR-groups for Semgrep `pattern-inside` nesting.
+/// Each group must have at least one matching range, and `start..end` must
+/// lie inside at least one range from every group.
+fn allow_inside_groups(
+    source: &str,
+    groups: &[Vec<loader::AnyRegex>],
+    start: usize,
+    end: usize,
+) -> bool {
+    if groups.is_empty() {
+        return true;
+    }
+    for group in groups {
+        let ranges = regex_ranges_any(source, group);
+        if ranges.is_empty() {
+            return false;
+        }
+        if ranges.iter().all(|(s, e)| start < *s || end > *e) {
+            return false;
+        }
+    }
+    true
+}
+
+fn inside_groups_present(source: &str, groups: &[Vec<loader::AnyRegex>]) -> bool {
+    groups
+        .iter()
+        .all(|group| !group.is_empty() && !regex_ranges_any(source, group).is_empty())
 }
 
 static RULE_CACHE: OnceLock<RuleCache> = OnceLock::new();
@@ -1576,11 +1616,10 @@ fn eval_rule_impl(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
             for sub in subs {
             let allow = &sub.allow;
             let deny = sub.deny.as_ref();
-            let inside = &sub.inside;
+            let inside_groups = &sub.inside_groups;
             let not_inside = &sub.not_inside;
-            let inside_ranges = regex_ranges_any(source, inside);
             let not_inside_ranges = regex_ranges_any(source, not_inside);
-            if !inside.is_empty() && inside_ranges.is_empty() {
+            if !inside_groups.is_empty() && !inside_groups_present(source, inside_groups) {
                 // This sub requires a context (pattern-inside) not present in
                 // this file. Skip this sub and try sibling subs.
                 continue;
@@ -1646,9 +1685,7 @@ fn eval_rule_impl(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
                                     continue;
                                 }
                             }
-                            if !inside_ranges.is_empty()
-                                && inside_ranges.iter().all(|(s, e)| start < *s || end > *e)
-                            {
+                            if !allow_inside_groups(source, inside_groups, start, end) {
                                 continue;
                             }
                             let block_match = || {
@@ -1686,7 +1723,7 @@ fn eval_rule_impl(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
                                 .unwrap_or_else(|| source.len());
                             let excerpt = source[line_start..line_end].to_string();
                             let id = blake3::hash(
-                                format!("{}:{}:{}:{}", rule.id, canonical, line, column).as_bytes(),
+                                format!("{}:{}:{}", rule.id, canonical, line).as_bytes(),
                             )
                             .to_hex()
                             .to_string();
@@ -1714,9 +1751,7 @@ fn eval_rule_impl(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
                                 continue;
                             }
                         }
-                        if !inside_ranges.is_empty()
-                            && inside_ranges.iter().all(|(s, e)| start < *s || end > *e)
-                        {
+                        if !allow_inside_groups(source, inside_groups, start, end) {
                             continue;
                         }
                         let block_match = || {
@@ -1754,7 +1789,7 @@ fn eval_rule_impl(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
                             .unwrap_or_else(|| source.len());
                         let excerpt = source[line_start..line_end].to_string();
                         let id = blake3::hash(
-                            format!("{}:{}:{}:{}", rule.id, canonical, line, column).as_bytes(),
+                            format!("{}:{}:{}", rule.id, canonical, line).as_bytes(),
                         )
                         .to_hex()
                         .to_string();
@@ -1791,11 +1826,12 @@ fn eval_rule_impl(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
                                             continue;
                                         }
                                     }
-                                    if !inside_ranges.is_empty()
-                                        && inside_ranges
-                                            .iter()
-                                            .all(|(s, e)| m.start() < *s || m.end() > *e)
-                                    {
+                                    if !allow_inside_groups(
+                                        source,
+                                        inside_groups,
+                                        m.start(),
+                                        m.end(),
+                                    ) {
                                         continue;
                                     }
                                     let block_match = || {
@@ -1834,7 +1870,7 @@ fn eval_rule_impl(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
                                         .unwrap_or_else(|| source.len());
                                     let excerpt = source[line_start..line_end].to_string();
                                     let id = blake3::hash(
-                                        format!("{}:{}:{}:{}", rule.id, canonical, line, column)
+                                        format!("{}:{}:{}", rule.id, canonical, line)
                                             .as_bytes(),
                                     )
                                     .to_hex()
@@ -2750,7 +2786,7 @@ fn eval_rule_impl(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
                 let mut findings = Vec::new();
                 for (_, line, column, excerpt) in &sink_hits {
                     let id = blake3::hash(
-                        format!("{}:{}:{}:{}", rule.id, canonical, line, column).as_bytes(),
+                        format!("{}:{}:{}", rule.id, canonical, line).as_bytes(),
                     )
                     .to_hex()
                     .to_string();
@@ -2776,10 +2812,9 @@ fn eval_rule_impl(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
                 );
                 return findings;
             }
-            if !has_flow {
-                debug!("eval_rule_impl: No flow found, returning empty findings for rule '{}' and file '{}'", rule.id, file.file_path);
-                return Vec::new();
-            }
+            // When we have concrete source symbols, rely on DFG paths below.
+            // CallGraph `has_flow` only tracks function→function edges and must
+            // not suppress intra-procedural taint (e.g. getParameter → exec).
             let mut findings = Vec::new();
             for (sym, _, _) in &source_syms {
                 for (sink_text, line, column, excerpt) in &sink_hits {
@@ -2810,7 +2845,7 @@ fn eval_rule_impl(file: &FileIR, rule: &CompiledRule) -> Vec<Finding> {
                             rule.severity
                         };
                         let id = blake3::hash(
-                            format!("{}:{}:{}:{}", rule.id, canonical, line, column).as_bytes(),
+                            format!("{}:{}:{}", rule.id, canonical, line).as_bytes(),
                         )
                         .to_hex()
                         .to_string();
@@ -2942,7 +2977,7 @@ fn parse_rego_output(
             .and_then(|p| p.as_str())
             .unwrap_or("")
             .to_string();
-        let id = blake3::hash(format!("{}:{}:{}:{}", rule.id, canonical, line, column).as_bytes())
+        let id = blake3::hash(format!("{}:{}:{}", rule.id, canonical, line).as_bytes())
             .to_hex()
             .to_string();
         Finding {

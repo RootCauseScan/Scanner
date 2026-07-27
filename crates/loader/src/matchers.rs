@@ -18,12 +18,25 @@ pub type TaintPattern = patterns::TaintPattern<AnyRegex>;
 /// patterns in sibling SubMatchers. This preserves Semgrep semantics where a
 /// `pattern-inside` nested inside a `patterns:` block only applies to that
 /// block's alternatives, not to the whole rule.
+///
+/// `inside_groups` is an AND of OR-groups: every group must match somewhere in
+/// the file, and an allow hit must sit inside at least one range from *each*
+/// group. This mirrors Semgrep nesting where a parent
+/// `pattern-either: [pattern-inside: A, pattern-inside: B]` is OR-ed, then
+/// AND-ed with a child `pattern-inside: C`.
 #[derive(Debug, Clone)]
 pub struct SubMatcher {
     pub allow: Vec<(AnyRegex, String)>,
     pub deny: Option<AnyRegex>,
-    pub inside: Vec<AnyRegex>,
+    pub inside_groups: Vec<Vec<AnyRegex>>,
     pub not_inside: Vec<AnyRegex>,
+}
+
+impl SubMatcher {
+    /// Flat OR list of all inside regexes (tests / debug helpers).
+    pub fn inside(&self) -> impl Iterator<Item = &AnyRegex> {
+        self.inside_groups.iter().flatten()
+    }
 }
 
 #[derive(Debug, Clone)]

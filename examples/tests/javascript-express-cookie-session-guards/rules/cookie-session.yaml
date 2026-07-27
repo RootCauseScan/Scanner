@@ -1,0 +1,30 @@
+rules:
+  - id: express-cookie-session-no-secure
+    message: Default session middleware settings — secure not set.
+    severity: WARNING
+    languages: [javascript]
+    patterns:
+      - pattern-either:
+          - pattern-inside: |
+              $SESSION = require('cookie-session');
+              ...
+          - pattern-inside: |
+              $SESSION = require('express-session');
+              ...
+      - pattern: $SESSION(...)
+      - pattern-not-inside: $SESSION(<... {cookie:{secure:true}} ...>,...)
+
+  - id: express-detect-notevil-usage
+    message: Detected usage of the notevil package.
+    severity: WARNING
+    languages: [javascript]
+    patterns:
+      - pattern-either:
+          - pattern-inside: |
+              $EVAL = require('notevil')
+              ...
+          - pattern-inside: |
+              import $EVAL from 'notevil'
+              ...
+      - pattern: $EVAL(...)
+      - pattern-not: $EVAL('...')

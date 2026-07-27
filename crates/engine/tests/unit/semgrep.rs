@@ -22,7 +22,7 @@ fn pattern_inside_and_not_inside() {
             subs: vec![SubMatcher {
                 allow: vec![(Regex::new(r"foo\(\)").unwrap().into(), "foo()".into())],
                 deny: None,
-                inside: vec![AnyRegex::from(Regex::new(r"bar\([^\)]*\)").unwrap())],
+                inside_groups: vec![vec![AnyRegex::from(Regex::new(r"bar\([^\)]*\)").unwrap())]],
                 not_inside: vec![AnyRegex::from(Regex::new(r"baz\([^\)]*\)").unwrap())],
             }],
         },
@@ -56,7 +56,7 @@ fn pattern_not_inside_blocks_match() {
             subs: vec![SubMatcher {
                 allow: vec![(Regex::new(r"foo\(\)").unwrap().into(), "foo()".into())],
                 deny: None,
-                inside: Vec::new(),
+                inside_groups: Vec::new(),
                 not_inside: vec![AnyRegex::from(Regex::new(r"baz\([^\)]*\)").unwrap())],
             }],
         },
@@ -90,7 +90,7 @@ fn pattern_not_inside_method_signature() {
             subs: vec![SubMatcher {
                 allow: vec![(Regex::new(r"foo\(\)").unwrap().into(), "foo()".into())],
                 deny: None,
-                inside: Vec::new(),
+                inside_groups: Vec::new(),
                 not_inside: vec![AnyRegex::from(Regex::new(r"fn safe\(\)").unwrap())],
             }],
         },
@@ -124,7 +124,7 @@ fn pattern_not_inside_wrong_signature_matches_all() {
             subs: vec![SubMatcher {
                 allow: vec![(Regex::new(r"foo\(\)").unwrap().into(), "foo()".into())],
                 deny: None,
-                inside: Vec::new(),
+                inside_groups: Vec::new(),
                 not_inside: vec![AnyRegex::from(Regex::new(r"fn missing\(\)").unwrap())],
             }],
         },
@@ -165,7 +165,7 @@ fn pattern_not_inside_method_signature_with_signwith() {
                     ),
                 ],
                 deny: None,
-                inside: Vec::new(),
+                inside_groups: Vec::new(),
                 not_inside: vec![AnyRegex::from(Regex::new(r"void good\(\)[^{]*\{[\s\S]*signWith\(").unwrap())],
             }],
         },
