@@ -382,6 +382,7 @@ fn rule_timeout_yields_no_findings() {
             baseline: None,
             suppress_comment: None,
             analysis_errors: None,
+            include_quality_rules: false,
         },
         None,
         None,
@@ -434,6 +435,7 @@ fn file_timeout_yields_no_findings() {
             baseline: None,
             suppress_comment: None,
             analysis_errors: None,
+            include_quality_rules: false,
         },
         None,
     );

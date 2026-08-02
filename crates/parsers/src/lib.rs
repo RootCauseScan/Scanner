@@ -51,25 +51,28 @@ pub fn build_dfg(fir: &mut FileIR) -> Result<()> {
 pub fn detect_type(path: &Path) -> Option<&'static str> {
     let name = path.file_name()?.to_string_lossy().to_lowercase();
     let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase());
-    let detected = if name == "dockerfile" {
-        Some("dockerfile")
-    } else {
-        match ext.as_deref() {
-            Some("yaml") | Some("yml") => Some("yaml"),
-            Some("json") => Some("json"),
-            Some("tf") => Some("hcl"),
-            Some("ts") | Some("tsx") => Some("typescript"),
-            Some("js") | Some("jsx") => Some("javascript"),
-            Some("py") => Some("python"),
-            Some("go") => Some("go"),
-            Some("rb") => Some("ruby"),
-            Some("rs") => Some("rust"),
-            Some("java") => Some("java"),
-            Some("php") => Some("php"),
-            _ => Some("generic"),
-        }
-    };
-    detected
+    if name == "dockerfile" {
+        return Some("dockerfile");
+    }
+    match ext.as_deref() {
+        Some("yaml") | Some("yml") => Some("yaml"),
+        Some("json") => Some("json"),
+        Some("tf") => Some("hcl"),
+        Some("ts") | Some("tsx") => Some("typescript"),
+        Some("js") | Some("jsx") | Some("mjs") | Some("cjs") => Some("javascript"),
+        Some("py") => Some("python"),
+        Some("go") => Some("go"),
+        Some("rb") => Some("ruby"),
+        Some("rs") => Some("rust"),
+        Some("java") => Some("java"),
+        Some("php") => Some("php"),
+        // Explicit generic text formats (regex / content rules). Unknown
+        // extensions (css, svg, png, lock, …) are skipped — scanning them as
+        // generic was a major slowdown on real Node/Python trees.
+        Some("html") | Some("htm") | Some("txt") | Some("md") | Some("xml") | Some("csv")
+        | Some("tmpl") | Some("ejs") => Some("generic"),
+        _ => None,
+    }
 }
 
 /// Canonical language identifiers understood by the scanner.

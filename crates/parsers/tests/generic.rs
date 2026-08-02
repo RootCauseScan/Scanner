@@ -12,3 +12,14 @@ fn parses_html_as_generic() {
     assert_eq!(ir.nodes.len(), 3);
     assert_eq!(ir.nodes[0].value.as_str().unwrap(), "<html>");
 }
+
+#[test]
+fn skips_unknown_extensions() {
+    assert_eq!(detect_type(std::path::Path::new("app.css")), None);
+    assert_eq!(detect_type(std::path::Path::new("logo.svg")), None);
+    assert_eq!(detect_type(std::path::Path::new("yarn.lock")), None);
+    assert_eq!(
+        detect_type(std::path::Path::new("handler.mjs")),
+        Some("javascript")
+    );
+}

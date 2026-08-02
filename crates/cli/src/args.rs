@@ -154,6 +154,12 @@ pub struct ScanArgs {
     /// Timeout per rule-vs-file operation in milliseconds
     #[arg(long, hide = true)]
     pub timeout_operation_ms: Option<u64>,
+    /// Soft budget per file in milliseconds (stops evaluating further rules)
+    #[arg(long, hide = true)]
+    pub timeout_file_ms: Option<u64>,
+    /// Also run maintainability/correctness rule packs (off by default)
+    #[arg(long, hide = true, default_value_t = false)]
+    pub include_quality_rules: bool,
     /// Write performance metrics to file
     #[arg(long, hide = true)]
     pub metrics: Option<PathBuf>,

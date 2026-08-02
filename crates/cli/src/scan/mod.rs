@@ -687,14 +687,19 @@ maintainer = "RootCause Security Team <contact@rootcause.dev>"
     let timeout_operation_ms = args
         .timeout_operation_ms
         .or(user_cfg.scan.timeout_operation_ms)
-        .unwrap_or(5_000);
+        .unwrap_or(crate::DEFAULT_RULE_TIMEOUT_MS);
+    let file_timeout_ms = args
+        .timeout_file_ms
+        .or(user_cfg.scan.timeout_file_ms)
+        .unwrap_or(crate::DEFAULT_FILE_TIMEOUT_MS);
     let analysis_errors = Arc::new(Mutex::new(Vec::new()));
     let cfg = engine::EngineConfig {
-        file_timeout: None,
+        file_timeout: Some(std::time::Duration::from_millis(file_timeout_ms)),
         rule_timeout: Some(std::time::Duration::from_millis(timeout_operation_ms)),
         baseline,
         suppress_comment: Some(args.suppress_comment.clone()),
         analysis_errors: Some(Arc::clone(&analysis_errors)),
+        include_quality_rules: args.include_quality_rules,
     };
     let mut metrics = engine::EngineMetrics::default();
     let mut metrics_opt = if args.metrics.is_some() {
@@ -1156,6 +1161,20 @@ maintainer = "RootCause Security Team <contact@rootcause.dev>"
                     append_analysis_error_log(
                         "analysis_timeout",
                         &format!("rule_id={rule_id}\nfile={file_path}\ntimeout_ms={timeout_ms}"),
+                        &args,
+                        total_files,
+                    );
+                }
+                engine::AnalysisError::FileTimeout {
+                    file_path,
+                    timeout_ms,
+                    rules_skipped,
+                } => {
+                    append_analysis_error_log(
+                        "analysis_file_timeout",
+                        &format!(
+                            "file={file_path}\ntimeout_ms={timeout_ms}\nrules_skipped={rules_skipped}"
+                        ),
                         &args,
                         total_files,
                     );

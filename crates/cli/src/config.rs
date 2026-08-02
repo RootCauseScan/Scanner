@@ -98,6 +98,8 @@ pub struct Config {
 pub struct ScanConfig {
     #[serde(default)]
     pub timeout_operation_ms: Option<u64>,
+    #[serde(default)]
+    pub timeout_file_ms: Option<u64>,
 }
 
 pub fn load_config() -> Result<Config> {

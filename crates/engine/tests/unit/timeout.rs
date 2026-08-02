@@ -34,7 +34,8 @@ fn slow_rule_respects_timeout() {
         baseline: None,
         suppress_comment: None,
         analysis_errors: None,
-    };
+            include_quality_rules: false,
+        };
 
     let start = Instant::now();
     let findings = analyze_file_with_config(&file, &rules, &cfg, None);
@@ -89,7 +90,8 @@ fn slow_rule_does_not_block_fast_rule() {
         baseline: None,
         suppress_comment: None,
         analysis_errors: None,
-    };
+            include_quality_rules: false,
+        };
 
     let start = Instant::now();
     let findings = analyze_file_with_config(&file, &rules, &cfg, None);
@@ -130,7 +132,8 @@ fn analyzes_without_rule_timeout() {
         baseline: None,
         suppress_comment: None,
         analysis_errors: None,
-    };
+            include_quality_rules: false,
+        };
 
     let findings = analyze_file_with_config(&file, &rules, &cfg, None);
     assert!(findings.iter().any(|f| f.rule_id == "fast.rule"));

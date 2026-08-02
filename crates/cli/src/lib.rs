@@ -18,8 +18,15 @@ pub mod rules;
 pub mod scan;
 pub mod ui;
 
-/// Default maximum size: 5 MiB.
-pub const DEFAULT_MAX_FILE_SIZE: u64 = 5 * 1024 * 1024;
+/// Default maximum size: 1 MiB (skips huge generated/vendor blobs).
+pub const DEFAULT_MAX_FILE_SIZE: u64 = 1024 * 1024;
+
+/// Default per-rule evaluation budget (ms).
+pub const DEFAULT_RULE_TIMEOUT_MS: u64 = 500;
+
+/// Default per-file evaluation budget (ms). Caps worst-case when many rules
+/// each approach the per-rule timeout.
+pub const DEFAULT_FILE_TIMEOUT_MS: u64 = 15_000;
 
 /// Converts a basic glob pattern to a regular expression.
 ///
@@ -94,10 +101,27 @@ pub fn parse_exclude(s: &str) -> Result<IgnorePattern, String> {
 
 /// Default exclusion patterns.
 pub fn default_excludes() -> Vec<IgnorePattern> {
-    vec![
-        parse_exclude("**/node_modules/**").expect("valid default"),
-        parse_exclude("**/.git/**").expect("valid default"),
+    [
+        "**/node_modules/**",
+        "**/bower_components/**",
+        "**/vendor/**",
+        "**/.git/**",
+        "**/dist/**",
+        "**/build/**",
+        "**/coverage/**",
+        "**/.next/**",
+        "**/out/**",
+        "**/*.min.js",
+        "**/*.min.css",
+        "**/*.min.map",
+        "**/*.bundle.js",
+        "**/jquery*.js",
+        "**/bootstrap*.js",
+        "**/bootstrap*.css",
     ]
+    .into_iter()
+    .map(|p| parse_exclude(p).expect("valid default exclude"))
+    .collect()
 }
 
 /// Reads `.gitignore` and `.sastignore` from `root` and converts their

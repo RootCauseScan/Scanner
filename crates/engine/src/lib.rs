@@ -1061,6 +1061,9 @@ pub struct EngineConfig {
     pub baseline: Option<HashSet<BaselineEntry>>,
     pub suppress_comment: Option<String>,
     pub analysis_errors: Option<Arc<Mutex<Vec<AnalysisError>>>>,
+    /// When false (default for CLI), skip maintainability/correctness rule packs
+    /// that drown security signal and burn the per-file budget.
+    pub include_quality_rules: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -1069,6 +1072,11 @@ pub enum AnalysisError {
         rule_id: String,
         file_path: String,
         timeout_ms: u128,
+    },
+    FileTimeout {
+        file_path: String,
+        timeout_ms: u128,
+        rules_skipped: usize,
     },
     RulePanic {
         rule_id: String,
@@ -1379,6 +1387,36 @@ pub fn merge_plugin_findings(
     base
 }
 
+fn is_quality_pack_rule(rule: &CompiledRule) -> bool {
+    let Some(sf) = rule.source_file.as_deref() else {
+        return false;
+    };
+    let s = sf.replace('\\', "/").to_ascii_lowercase();
+    s.contains("/maintainability/")
+        || s.contains("/correctness/")
+        || s.contains("/best-practice/")
+        || s.contains("/best-practices/")
+        || s.contains("/quality/")
+}
+
+fn rule_priority(rule: &CompiledRule) -> u8 {
+    // Lower runs first. Taint + ERROR before noisy audit MEDIUM rules.
+    let sev = match rule.severity {
+        Severity::Critical | Severity::Error => 0,
+        Severity::High => 1,
+        Severity::Medium => 3,
+        Severity::Low => 4,
+        Severity::Info => 5,
+    };
+    let is_taint = matches!(rule.matcher, MatcherKind::TaintRule { .. })
+        || !rule.sources.is_empty()
+        || !rule.sinks.is_empty();
+    let taint_boost = if is_taint { 0 } else { 1 };
+    sev * 2 + taint_boost
+}
+
+const MAX_FINDINGS_PER_RULE_FILE: usize = 20;
+
 fn analyze_file_with_config_inner(
     file: &FileIR,
     rule_index: &ApplicableRuleIndex<'_>,
@@ -1389,24 +1427,48 @@ fn analyze_file_with_config_inner(
     let start = Instant::now();
     let mut out = Vec::new();
     let pool = thread_pool();
-    let operation_timeout = cfg.rule_timeout.or(cfg.file_timeout);
-    let file_arc = if operation_timeout.is_some() {
+    // Per-rule budget. Prefer explicit rule_timeout; fall back to file_timeout
+    // for tests that only set the latter.
+    let rule_timeout = cfg.rule_timeout.or(cfg.file_timeout);
+    let file_budget = cfg.file_timeout;
+    let file_arc = if rule_timeout.is_some() {
         Some(Arc::new(file.clone()))
     } else {
         None
     };
     let applicable_rules = rule_index.rules_for(&file.file_type);
+    // Prefer high-severity / taint rules when a file budget may cut the loop short.
+    let mut ordered: Vec<&CompiledRule> = applicable_rules.iter().copied().collect();
+    ordered.sort_by_key(|r| rule_priority(r));
     // Hash the file once and reuse it for every rule's cache key.
     let content_hash: Arc<str> = Arc::from(cache::hash_file(file).as_str());
-    for r in applicable_rules.iter().copied() {
+    let mut rules_remaining = ordered.len();
+    for r in ordered.into_iter() {
+        rules_remaining = rules_remaining.saturating_sub(1);
+        if let Some(budget) = file_budget {
+            if start.elapsed() >= budget {
+                if let Some(errors) = &cfg.analysis_errors {
+                    let mut guard = errors.lock().unwrap_or_else(|e| e.into_inner());
+                    guard.push(AnalysisError::FileTimeout {
+                        file_path: file.file_path.clone(),
+                        timeout_ms: budget.as_millis(),
+                        rules_skipped: rules_remaining + 1,
+                    });
+                }
+                break;
+            }
+        }
         // Skip rules whose `paths:` scope excludes this file, then rules that
         // provably cannot match (sound prefilter).
+        if !cfg.include_quality_rules && is_quality_pack_rule(r) {
+            continue;
+        }
         if !rule_index.path_allows(r, file) || !rule_index.prefilter_allows(r, file) {
             continue;
         }
         debug!("Evaluating rule '{}' on file '{}'", r.id, file.file_path);
         let rule_start = Instant::now();
-        let findings = if let Some(rt) = operation_timeout {
+        let findings = if let Some(rt) = rule_timeout {
             if rt.is_zero() {
                 Vec::new()
             } else {
@@ -1450,6 +1512,13 @@ fn analyze_file_with_config_inner(
             }
         } else {
             eval_rule_with_hash(file, r, &content_hash)
+        };
+        // Cap per-rule volume: pathological rules (open-redirect, etc.) otherwise
+        // emit hundreds of near-duplicate hits and dominate the report.
+        let findings = if findings.len() > MAX_FINDINGS_PER_RULE_FILE {
+            findings.into_iter().take(MAX_FINDINGS_PER_RULE_FILE).collect()
+        } else {
+            findings
         };
         if let Some(m) = metrics.as_deref_mut() {
             let elapsed = rule_start.elapsed().as_millis();

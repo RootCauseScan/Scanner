@@ -16,8 +16,28 @@ fn excludes_common_dirs() {
         &patterns,
         DEFAULT_MAX_FILE_SIZE
     ));
+    assert!(is_excluded(
+        Path::new("/repo/vendor/autoload.php"),
+        &patterns,
+        DEFAULT_MAX_FILE_SIZE
+    ));
+    assert!(is_excluded(
+        Path::new("/repo/public/assets/jquery-3.2.1.min.js"),
+        &patterns,
+        DEFAULT_MAX_FILE_SIZE
+    ));
+    assert!(is_excluded(
+        Path::new("/repo/dist/app.bundle.js"),
+        &patterns,
+        DEFAULT_MAX_FILE_SIZE
+    ));
     assert!(!is_excluded(
         Path::new("/repo/src/main.rs"),
+        &patterns,
+        DEFAULT_MAX_FILE_SIZE
+    ));
+    assert!(!is_excluded(
+        Path::new("/repo/app/routes/users.js"),
         &patterns,
         DEFAULT_MAX_FILE_SIZE
     ));
